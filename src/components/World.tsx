@@ -204,6 +204,48 @@ function VirtualGate({
   );
 }
 
+// ===== גשש מקטע הרחפן =====
+// רץ פעם אחת בפריים (רק בעולם הפיזיקלי, לא בחלוניות המפה/תצוגה) ובודק אם הרחפן
+// חלף אופקית (X,Z — בכל גובה) מעל sensor-2 / sensor-5, כדי לפתוח/לסגור את מקטע הרחפן.
+// המלבנים תואמים בדיוק את מיקום וגודל השטיחים המקוריים (שניהם axis-aligned, rotationY=0):
+//   sensor-2: מרכז (0, 3.5),      size 15×1.4  → חצאי-מידות X=7.5, Z=0.7
+//   sensor-5: מרכז (-49, -152.5), size 8×1     → חצאי-מידות X=4,   Z=0.5
+// מרכז sensor-5 מחושב מ-transformBldgPos([-5.5,0,-139]) = [-49, 0, -152.5].
+const DRONE_SENSOR2 = { cx: 0, cz: 3.5, hx: 7.5, hz: 0.7 };
+const DRONE_SENSOR5 = { cx: -49, cz: -152.5, hx: 4, hz: 0.5 };
+
+function DroneSensorWatcher() {
+  const triggerDroneStart = useTelemetryStore(s => s.triggerDroneStart);
+  const triggerDroneEnd = useTelemetryStore(s => s.triggerDroneEnd);
+  // דגלי קצה: מפעילים רק ברגע הכניסה למלבן (מעבר מ-בחוץ ל-בפנים), לא בכל פריים שהרחפן בפנים.
+  const inS2 = useRef(false);
+  const inS5 = useRef(false);
+
+  useFrame(() => {
+    const s = useTelemetryStore.getState();
+    // מקטע הרחפן רלוונטי רק אחרי שריצת הרובוט הסתיימה, וכל עוד הוא לא נסגר.
+    if (!s.expEnd || s.droneSegEnd != null) {
+      inS2.current = false;
+      inS5.current = false;
+      return;
+    }
+    const [x, , z] = s.dronePosition;
+
+    const overS2 = Math.abs(x - DRONE_SENSOR2.cx) <= DRONE_SENSOR2.hx &&
+                   Math.abs(z - DRONE_SENSOR2.cz) <= DRONE_SENSOR2.hz;
+    if (overS2 && !inS2.current) triggerDroneStart();
+    inS2.current = overS2;
+
+    const overS5 = Math.abs(x - DRONE_SENSOR5.cx) <= DRONE_SENSOR5.hx &&
+                   Math.abs(z - DRONE_SENSOR5.cz) <= DRONE_SENSOR5.hz;
+    // רק אם המקטע כבר נפתח — כניסה מעל sensor-5 סוגרת אותו.
+    if (overS5 && !inS5.current && s.droneSegStart != null) triggerDroneEnd();
+    inS5.current = overS5;
+  });
+
+  return null;
+}
+
 export function World({ visualsOnly = false, practice = false, showHillOverlay = true, showCompass = true }: { visualsOnly?: boolean, practice?: boolean, showHillOverlay?: boolean, showCompass?: boolean }) {
   const triggerSensor2 = useTelemetryStore(s => s.triggerSensor2);
   const triggerSensor3 = useTelemetryStore(s => s.triggerSensor3);
@@ -974,6 +1016,7 @@ export function World({ visualsOnly = false, practice = false, showHillOverlay =
       {!practice && <DesertVillage visualsOnly={visualsOnly} />}
       {obstacles}
       {!visualsOnly && <CompassHUD />}
+      {!visualsOnly && !practice && <DroneSensorWatcher />}
     </>
   );
 }
