@@ -47,6 +47,7 @@ export interface SessionRecord {
   lap1Time: string;
   lap2Time: string;
   narrowExitTime: string;
+  droneTime: string;   // זמן מקטע הרחפן (מ-sensor-2 עד sensor-5 אחרי סיום ריצת הרובוט). 'N/A' עד שיימדד.
 }
 
 export interface SegmentRecord {
@@ -201,6 +202,9 @@ interface TelemetryState {
   lap2End: number | null;
   narrowExitStart: number | null;
   narrowExitEnd: number | null;
+  // --- מקטע הרחפן: נמדד רק אחרי שריצת הרובוט הסתיימה (expEnd קיים) ---
+  droneSegStart: number | null;
+  droneSegEnd: number | null;
   alley1Start: number | null;
   alley1End: number | null;
   alley2Start: number | null;
@@ -235,6 +239,9 @@ interface TelemetryState {
   triggerBldgInside: () => void;
   triggerSensor4: () => void;
   triggerSensor5: () => void;
+  // הרחפן חלף מעל sensor-2 / sensor-5 (אופקית, בכל גובה) אחרי סיום ריצת הרובוט
+  triggerDroneStart: () => void;
+  triggerDroneEnd: () => void;
   downloadCSV: () => void;
 }
 // ממיר את מצב שתי שכבות-העל לתווית של חלופת הסימון
@@ -253,6 +260,7 @@ const blankTimers = {
   narrowStart: null, narrowEnd: null,
   lap1Start: null, lap1End: null, lap2Start: null, lap2End: null,
   narrowExitStart: null, narrowExitEnd: null,
+  droneSegStart: null, droneSegEnd: null,
   alley1Start: null, alley1End: null,
   alley2Start: null, alley2End: null,
   hill6EndTouchCount: 0, lastHill6EndTouch: 0,
@@ -643,6 +651,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       lap1Time: calc(s.lap1Start, s.lap1End),
       lap2Time: calc(s.lap2Start, s.lap2End),
       narrowExitTime: calc(s.narrowExitStart, s.narrowExitEnd),
+      droneTime: 'N/A',   // ייקבע מאוחר יותר אם/כאשר מקטע הרחפן יימדד (triggerDroneEnd)
     };
 
     set({ sessionRecords: [...s.sessionRecords, record] });
@@ -661,6 +670,9 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   lap2End: null,
   narrowExitStart: null,
   narrowExitEnd: null,
+
+  droneSegStart: null,
+  droneSegEnd: null,
 
   alley1Start: null,
   alley1End: null,
@@ -839,6 +851,47 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       set({ sessionComplete: true });
       console.log("Narrow (Exit) Ended, Experiment Finished");
     }
+  },
+
+  // ===== מקטע הרחפן =====
+  // מתחיל רק אחרי שריצת הרובוט הסתיימה (expEnd קיים) והמקטע עוד לא התחיל.
+  // נקרא כשהרחפן חולף (אופקית, בכל גובה) מעל sensor-2.
+  triggerDroneStart: () => {
+    const s = get();
+    if (s.expEnd && s.droneSegStart == null) {
+      set({ droneSegStart: Date.now() });
+      console.log("Drone Segment Started (drone crossed sensor-2)");
+    }
+  },
+
+  // נעצר כשהרחפן חולף (אופקית, בכל גובה) מעל sensor-5, בתנאי שהמקטע התחיל ועוד לא נסגר.
+  // בסיום: מעדכן במקום את שורת הסשן האחרונה של הסשן הנוכחי, ומוסיף לה את droneTime.
+  triggerDroneEnd: () => {
+    const s = get();
+    if (s.droneSegStart == null || s.droneSegEnd != null) return;
+    const now = Date.now();
+    const droneTime = ((now - s.droneSegStart) / 1000).toFixed(2);
+    set({ droneSegEnd: now });
+
+    // (1) שורת מקטע בקובץ ה-CSV הקיים — כך הזמן מגיע לקובץ שמורידים.
+    //     משתמשים ב-_pushSegment כדי לשמור על אותו פורמט (POV/סימבולוגיה/ניהוג ששלטו במקטע).
+    get()._pushSegment('Drone Segment', s.droneSegStart, now, null);
+
+    // (2) עדכון במקום של שורת הסשן האחרונה של הסשן הנוכחי — כפי שהתבקש.
+    const num = s.currentSessionNumber ?? 0;
+    const records = get().sessionRecords;
+    let idx = -1;
+    for (let i = records.length - 1; i >= 0; i--) {
+      if (records[i].sessionNumber === num) { idx = i; break; }
+    }
+    if (idx === -1) {
+      console.warn("Drone Segment ended but no matching session record was found to update");
+      return;
+    }
+    const updated = records.slice();
+    updated[idx] = { ...updated[idx], droneTime };
+    set({ sessionRecords: updated });
+    console.log("Drone Segment Ended (drone crossed sensor-5). droneTime:", droneTime);
   },
 
   // מוריד קובץ CSV עם כל השורות שנצברו (שורה לכל סשן).
