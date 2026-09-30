@@ -1,7 +1,10 @@
 // File: src/components/Village.tsx
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
+import { useFrame } from '@react-three/fiber';
+import * as THREE from 'three';
 import { RigidBody, CuboidCollider } from '@react-three/rapier';
 import { useGLTF, Clone } from '@react-three/drei';
+import { useTelemetryStore, ROCKET_MAN_POS } from '../store';
 
 // ==========================================
 // שיידר גלובלי שמייצר טיח ובטון תעשייתי (מעודן למניעת ריצוד)
@@ -599,18 +602,142 @@ export function DesertVillage({ visualsOnly = false }: { visualsOnly?: boolean }
   return <>{rendered}</>;
 }
 
+/* ================= התאדות המטרה ================= */
+/* סימון ויזואלי למשתתפים בלבד. לא נרשם בשום מקום ולא נכנס ל-CSV.            */
+/* לא נדרש שום קובץ תלת-מימד נוסף — האפקט כולו שיידר על המודל הקיים.        */
+
+// ===== ערכי כוונון =====
+export const DISSOLVE_CONFIG = {
+  ms: 3600,                    // משך ההתאדות במילישניות
+  edge: 0.12,                  // רוחב פס הזוהר בחזית (0..1)
+  heightBias: 0.45,            // 0 = כתמים אקראיים בכל הגוף | 1 = קו ישר עולה מלמטה
+  color: [1.0, 0.55, 0.15],    // צבע הזוהר (RGB 0..1) — ענבר חם
+};
+
+// =======================
+
+type DissolveHandle = {
+  uProgress: { value: number };
+  uEdge: { value: number };
+  uHeightBias: { value: number };
+  uColor: { value: THREE.Color };
+};
+
+/**
+ * מזריק לחומרי המודל שיידר שמוחק פיקסלים לפי סף רעש מתקדם, עם שוליים זוהרים.
+ * הדמות נמוגה מלמטה למעלה. כל עותקי הדמות (סצנת הפיזיקה + כל חלונית) חולקים
+ * את אותו חומר ואת אותה יוניפורם, ולכן ההזרקה והידית נשמרות על המודל עצמו.
+ */
+function prepareDissolve(root: THREE.Object3D): DissolveHandle {
+  const cached = (root.userData as any).__dissolveHandle as DissolveHandle | undefined;
+  if (cached) return cached;
+
+  const uProgress = { value: 0 };
+  const uEdge = { value: DISSOLVE_CONFIG.edge };
+  const uHeightBias = { value: DISSOLVE_CONFIG.heightBias };
+  const uColor = { value: new THREE.Color(...(DISSOLVE_CONFIG.color as [number, number, number])) };
+
+  // קנה המידה של הרעש נגזר מגודל המודל, כדי שהכתמים ייראו נכון בלי תלות
+  // ביחידות שבהן הוא יוצא.
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const uNoiseScale = { value: 5 / maxDim };
+  const uMinY = { value: box.min.y };
+  const uSpanY = { value: Math.max(1e-4, size.y) };
+
+  root.traverse((o: any) => {
+    if (!o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (m.userData.__dissolve) continue;
+      m.userData.__dissolve = true;
+
+      m.onBeforeCompile = (shader: any) => {
+        shader.uniforms.uProgress = uProgress;
+        shader.uniforms.uEdge = uEdge;
+        shader.uniforms.uHeightBias = uHeightBias;
+        shader.uniforms.uColor = uColor;
+        shader.uniforms.uNoiseScale = uNoiseScale;
+        shader.uniforms.uMinY = uMinY;
+        shader.uniforms.uSpanY = uSpanY;
+
+        shader.vertexShader = shader.vertexShader
+          .replace('void main() {', 'varying vec3 vDissolvePos;\nvoid main() {')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vDissolvePos = position;');
+
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            'void main() {',
+            `varying vec3 vDissolvePos;
+             uniform float uProgress;
+             uniform float uEdge;
+             uniform float uHeightBias;
+             uniform vec3  uColor;
+             uniform float uNoiseScale;
+             uniform float uMinY;
+             uniform float uSpanY;
+             ${noiseGLSL}
+             float dThresh;
+             void main() {
+               float dNoise = smoothNoise(vDissolvePos * uNoiseScale);
+               float dHeight = clamp((vDissolvePos.y - uMinY) / uSpanY, 0.0, 1.0);
+               dThresh = mix(dNoise, dHeight, uHeightBias);
+               if (uProgress > 0.0 && dThresh < uProgress) discard;`,
+          )
+          .replace(
+            '#include <dithering_fragment>',
+            `#include <dithering_fragment>
+             if (uProgress > 0.0) {
+               float dEdge = 1.0 - smoothstep(uProgress, uProgress + uEdge, dThresh);
+               gl_FragColor.rgb = mix(gl_FragColor.rgb, uColor, dEdge);
+             }`,
+          );
+      };
+      m.customProgramCacheKey = () => 'rocketman_dissolve';
+      m.needsUpdate = true;
+    }
+  });
+
+  const handle = { uProgress, uEdge, uHeightBias, uColor };
+  (root.userData as any).__dissolveHandle = handle;
+  return handle;
+}
+
 /* ---------- קומפוננטת הדמות עם המשגר ---------- */
 function RocketMan() {
   const model = useGLTF(`${import.meta.env.BASE_URL}manwithrocket.glb`);
+  const groupRef = useRef<THREE.Group>(null);
+  const dissolve = useMemo(() => prepareDissolve(model.scene), [model]);
 
   // ===== ערכי כוונון — שני אלה תשני עד שהדמות תשב מושלם =====
-  const POS: [number, number, number] = [-49.1, 1.3, -103.4]; // מיקום: X, גובה(Y), Z
-  const SCALE = 1.5;                                          // גודל: הגדילי/הקטיני עד שמתאים
-  const ROT_Y = 1.57;                                       // סיבוב סביב הציר האנכי (רדיאנים)                                          // סיבוב סביב הציר האנכי (רדיאנים)
+  const SCALE = 1.5;    // גודל: הגדילי/הקטיני עד שמתאים
+  const ROT_Y = 1.57;   // סיבוב סביב הציר האנכי (רדיאנים)
   // =========================================================
 
+  useFrame(() => {
+    const st = useTelemetryStore.getState();
+    const at = st.targetDissolveAt;
+
+    // כוונון חי — שינוי הערכים משפיע מיד, בלי לקמפל מחדש.
+    dissolve.uEdge.value = DISSOLVE_CONFIG.edge;
+    dissolve.uHeightBias.value = DISSOLVE_CONFIG.heightBias;
+    dissolve.uColor.value.setRGB(...(DISSOLVE_CONFIG.color as [number, number, number]));
+
+    const p = at == null ? 0
+      : Math.min(1 + DISSOLVE_CONFIG.edge, (performance.now() - at) / DISSOLVE_CONFIG.ms);
+    dissolve.uProgress.value = p;
+
+    if (!groupRef.current) return;
+    // בסוף התהליך מסתירים את הקבוצה כולה. בלי זה הצל היה נשאר על הקרקע —
+    // מפת הצללים מציירת בחומר עומק נפרד שלא עובר את ה-discard.
+    groupRef.current.visible = p < 1 + DISSOLVE_CONFIG.edge;
+
+  });
+
   return (
-    <group position={POS} rotation={[0, ROT_Y, 0]} scale={SCALE}>
+    <group ref={groupRef} position={ROCKET_MAN_POS} rotation={[0, ROT_Y, 0]} scale={SCALE}>
       <Clone object={model.scene} castShadow receiveShadow />
     </group>
   );

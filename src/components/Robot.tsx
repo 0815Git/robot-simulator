@@ -6,7 +6,7 @@ import { RigidBody, RapierRigidBody, CuboidCollider, CapsuleCollider, useRapier,
 import * as THREE from 'three';
 import { useKeyboard } from '../hooks/useKeyboard';
 import { getGamepadAxes } from '../hooks/useGamepads';
-import { useTelemetryStore, ViewMode } from '../store';
+import { useTelemetryStore, ViewMode, ROCKET_MAN_POS, TARGET_RANGE_M } from '../store';
 export const physicalSpeeds = { left: 0, right: 0 };
 // ===== מיפוי הגה+דוושות Logitech G920 (steerMode 'C') =====
 const WHEEL_AXIS   = 0;   // ציר סיבוב ההגה
@@ -90,6 +90,7 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
   const lastResetRef = useRef(0);
   const prevEKeyRef = useRef(false);
   const prevLinkBtnRef = useRef(false);
+  const prevDissolveKeyRef = useRef(false);
   // ריכוך הסיבוב העדין — מחושב ב-useFrame, נצרך בצעד הפיזיקה.
   const fineTurnDampRef = useRef(1.0);
 
@@ -158,6 +159,24 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       if ((psLaunch || tmLaunch) && !atCeiling) {
         st.launchDrone(LAUNCH_SPEED * delta);
       }
+    }
+
+    // ===== נטרול המטרה — התאדות הדמות עם משגר הכתף =====
+    // סימון ויזואלי למשתתפים בלבד: לא נשמר, לא נמדד ולא נכנס ל-CSV.
+    // זמני: מקש F במקלדת, עד שנחליט איזה כפתור בכל ג'ויסטיק יבצע זאת.
+    // רק הרובוט מבצע — הטווח נמדד ממנו, גם כשמסתכלים דרך חוזי הרחפן.
+    {
+      const dissolveKey = !!keys.current['KeyF'];
+      if (dissolveKey && !prevDissolveKeyRef.current) {
+        const stT = useTelemetryStore.getState();
+        if (stT.targetDissolveAt == null) {
+          const rp = bodyRef.current.translation();
+          const ddx = rp.x - ROCKET_MAN_POS[0];
+          const ddz = rp.z - ROCKET_MAN_POS[2];
+          if (Math.hypot(ddx, ddz) <= TARGET_RANGE_M) stT.dissolveTarget();
+        }
+      }
+      prevDissolveKeyRef.current = dissolveKey;
     }
 
     // ===== צימוד רחפן ⇄ רובוט: B2 של הג'ויסטיק, רק במצב ב'. =====
@@ -936,7 +955,10 @@ export function RobotVisuals({ mode, sync = false, showPredictive = false, yield
       cam.quaternion.copy(camQuatTarget);
       camInit.current = true;
     } else {
-      cam.quaternion.slerp(camQuatTarget, 12 * delta);
+      // Math.min חוסם את המקדם ב-1. בלעדיו, כשקצב הפריימים יורד מתחת ל-12
+      // (delta > 1/12), הביטוי עובר 1 ו-slerp מפסיק להתכנס אל היעד ומתחיל
+      // להשליך מעבר לו — המצלמה מתנדנדת ומסתחררת.
+      cam.quaternion.slerp(camQuatTarget, Math.min(1, 12 * delta));
     }
 
     // ===== מיקום הצלב המעוגל: היטל אמיתי של נקודת היעד דרך המצלמה הפעילה =====

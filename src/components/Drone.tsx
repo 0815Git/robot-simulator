@@ -26,6 +26,13 @@ const FOLLOW_RATE = 2.5;
 const FOLLOW_MAX_SPEED = 8;
 // Manual flight speed (m/s)
 const FLY_SPEED = 7;
+// קצב הפנייה של הרחפן אל הרובוט ברגע הצימוד (רדיאנים לשנייה).
+// ~103°/ש — סיבוב של 180° נמשך כ-1.7 שניות, מספיק כדי לראות אותו מסתובב.
+const LINK_TURN_RATE = 1.8;
+// מעל המרחק הזה (מטרים) הרחפן קודם מסתובב ורק אז מאיץ, כך שרואים את הפנייה
+// לפני הטיסה הארוכה. בתוך הטווח הזה המעקב חופשי — אחרת הרחפן היה עוצר ומהסס
+// בכל פעם שהוא עוקף את הרובוט בדרך אל נקודת הריחוף שמאחוריו.
+const LINK_TURN_BEFORE_FLY_DIST = 8;
 // מהירות טיפוס/ירידה בגובה עם ההאט — במצב *לא מצומד* (מ'/ש').
 const DRONE_CLIMB_SPEED = 3;
 // ===== גובה הרחפן ב*צימוד* — פרמטרים נפרדים לגמרי מהמצב הלא-מצומד =====
@@ -492,6 +499,8 @@ export function DroneVisuals({ camera = false, forceActive = false }: { camera?:
   const smoothPos = useMemo(() => new THREE.Vector3(0, HOVER_OFFSET.y, 0), []);
     const prevYRef = useRef(HOVER_OFFSET.y);
   const smoothClimbRef = useRef(0);
+  // כיוון גוף הרחפן בצימוד — מוחלק בקצב מוגבל כדי שהפנייה אל הרובוט תהיה נראית.
+  const followYaw = useRef(0);
 
   useFrame((state, delta) => {
     const body = robotBodyRef.current;
@@ -534,6 +543,10 @@ export function DroneVisuals({ camera = false, forceActive = false }: { camera?:
       // --- Manual mode: position comes from the store ---
       const [mx, my, mz] = s.dronePosition;
       smoothPos.set(mx, my, mz);
+      // בניהוג ידני המיקום והכיוון כבר מסונכרנים למצב הנוכחי. מסמנים שהם מאותחלים,
+      // כדי שמעבר לצימוד יתחיל בדיוק מכאן במקום לקפוץ אל נקודת הריחוף.
+      posInit.current = true;
+      followYaw.current = s.droneYaw;
     } else {
       // --- מצב מעקב (קישור): טס אל מעל-ומאחורי הרובוט, תמיד שואף למאחור ---
       // היעד = מיקום הרובוט + היסט "מאחור" המסובב לפי כיוון הרובוט (לא היסט עולמי קבוע)
@@ -547,20 +560,40 @@ export function DroneVisuals({ camera = false, forceActive = false }: { camera?:
       // גובה = גובה המעקב הבסיסי + כוונון הגובה מההאט בזמן צימוד
       _hoverTarget.set(_robotPos.x + backX, _robotPos.y + HOVER_OFFSET.y + s.droneFollowHeightOffset, _robotPos.z + backZ);
 
+      // מתחילים תמיד מהמיקום ומהכיוון שבהם הרחפן נמצא עכשיו — בלי קפיצה.
       if (!posInit.current) {
-        smoothPos.copy(_hoverTarget);
+        smoothPos.set(s.dronePosition[0], s.dronePosition[1], s.dronePosition[2]);
+        followYaw.current = s.droneYaw;
         posInit.current = true;
-      } else {
-        _flyDir.copy(_hoverTarget).sub(smoothPos);
-        const dist = _flyDir.length();
-        if (dist > 0.0001) {
-          const speed = Math.min(dist * FOLLOW_RATE, FOLLOW_MAX_SPEED);
+      }
+
+      // ===== קודם מסתובבים, אחר כך טסים =====
+      // הרחפן פונה אל הרובוט בקצב מוגבל, כך שרואים את הפנייה עצמה. כל עוד הוא
+      // אינו מכוון אל היעד מהירות הטיסה נחנקת, בדיוק כמו רחפן שמסתובב לפני שהוא מאיץ.
+      const dxr = _robotPos.x - smoothPos.x;
+      const dzr = _robotPos.z - smoothPos.z;
+      const desiredYaw = Math.atan2(-dxr, -dzr);
+
+      let yawErr = desiredYaw - followYaw.current;
+      while (yawErr > Math.PI) yawErr -= Math.PI * 2;
+      while (yawErr < -Math.PI) yawErr += Math.PI * 2;
+
+      const maxTurn = LINK_TURN_RATE * delta;
+      followYaw.current += Math.max(-maxTurn, Math.min(maxTurn, yawErr));
+
+      _flyDir.copy(_hoverTarget).sub(smoothPos);
+      const dist = _flyDir.length();
+      if (dist > 0.0001) {
+        const alignGate = dist > LINK_TURN_BEFORE_FLY_DIST ? Math.max(0, Math.cos(yawErr)) : 1;
+        const speed = Math.min(dist * FOLLOW_RATE, FOLLOW_MAX_SPEED) * alignGate;
+        if (speed > 0) {
           smoothPos.addScaledVector(_flyDir.multiplyScalar(1 / dist), Math.min(speed * delta, dist));
         }
       }
+
       s.setDronePosition([smoothPos.x, smoothPos.y, smoothPos.z]);
-      // שומרים גם את הזווית כל פריים, כך שבניתוק הרחפן יישאר בזווית הנוכחית ולא יקפוץ לישנה
-      s.setDroneYaw(robotYaw);
+      // שומרים את הכיוון הוויזואלי בפועל, כך שבניתוק הרחפן ימשיך מאותה זווית בדיוק.
+      s.setDroneYaw(followYaw.current);
     }
 
     // Gentle hover bob.
@@ -574,9 +607,8 @@ export function DroneVisuals({ camera = false, forceActive = false }: { camera?:
     if (manual) {
       bodyYaw = s.droneYaw; // הגוף מסתובב לפי הניהוג הדיפרנציאלי (B6/B8)
     } else {
-      const dx = _robotPos.x - smoothPos.x;
-      const dz = _robotPos.z - smoothPos.z;
-      bodyYaw = Math.atan2(-dx, -dz);
+      // הכיוון שהוחלק למעלה — כך רואים את הפנייה במקום קפיצה מיידית.
+      bodyYaw = followYaw.current;
     }
     _bodyEuler.set(0, bodyYaw, 0);
     _bodyQuat.setFromEuler(_bodyEuler);

@@ -3,6 +3,12 @@ import { create } from 'zustand';
 import { RapierRigidBody } from '@react-three/rapier';
 import * as THREE from 'three';
 
+// ===== הדמות עם משגר הכתף =====
+// מקור אמת יחיד למיקום: Village.tsx מציב אותה שם, ו-Robot.tsx בודק מולו טווח.
+export const ROCKET_MAN_POS: [number, number, number] = [-49.1, 1.3, -103.4];
+// מרחק מרבי (מטרים, במישור האופקי) שממנו הרובוט יכול לנטרל את המטרה.
+export const TARGET_RANGE_M = 15;
+
 export enum ViewMode {
   POV1 = 'POV 1 (Nose)',
   POV2 = 'POV 2 (Rear)',
@@ -121,6 +127,10 @@ interface TelemetryState {
   droneFollowHeightTarget: number;        // מטרים — יעד הגובה שההאט מפקד (הערך בפועל זוחל אליו ברכוך)
   setDroneFollowHeightTarget: (v: number) => void;
     droneLaunched: boolean;
+  // רגע ההתחלה של התאדות המטרה (performance.now), או null אם עוד לא הופעלה.
+  // סימון ויזואלי למשתתפים בלבד — לא נרשם בשום מקום ולא נכנס ל-CSV.
+  targetDissolveAt: number | null;
+  dissolveTarget: () => void;
   launchDrone: (dy?: number) => void;
   aimScreenX: number;
   aimScreenY: number;
@@ -329,9 +339,10 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
     const s = get();
     if (linked) {
       // ----- הפעלת צימוד (מעקב) -----
-      // מאפסים את כיוון הרחפן כך שישאף מיד להסתדר מאחורי הרובוט (מונע "עקום"/מלפנים).
+      // לא מאפסים את כיוון הרחפן: הוא מסתובב אל הרובוט בקצב מוגבל ב-DroneVisuals,
+      // כדי שהמשתמשת תראה את הפנייה ואת הטיסה במקום קפיצה מיידית למקום.
       // נקודת המבט בצימוד: מצלמה מיושרת עם אף הרובוט (yaw=0) ומביטה מטה בזווית ‎-35°.
-      let patch: any = { droneManual: false, droneYaw: 0, droneBodyPitch: 0, droneFollowHeightOffset: 0, droneFollowHeightTarget: 0, droneGimbalYaw: 0, droneGimbalPitch: -10 };
+      let patch: any = { droneManual: false, droneBodyPitch: 0, droneFollowHeightOffset: 0, droneFollowHeightTarget: 0, droneGimbalYaw: 0, droneGimbalPitch: -10 };
       // הצימוד תמיד מציג/מעביר שליטה לחוזי הרובוט — כי בצימוד נוהגים רק ברובוט.
       if (s.screenLayout === ScreenLayout.SPLIT_VIDEO_VIDEO) {
         patch.activePane = s.videoSlot1 === 'robot' ? 1 : 2;
@@ -368,6 +379,10 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   droneFollowHeightTarget: 0,
   setDroneFollowHeightTarget: (v) => set({ droneFollowHeightTarget: Math.max(-3, Math.min(36, v)) }),
   droneLaunched: false,
+  targetDissolveAt: null,
+  dissolveTarget: () => {
+    if (get().targetDissolveAt == null) set({ targetDissolveAt: performance.now() });
+  },
   // מעלה את הרחפן בהדרגה כל עוד לוחצים; ברגע שעולה מעל הרובוט הוא נחשב "הומרא".
   // dy = כמה לעלות בפריים הזה. התקרה נחסמת ע"י המתפעל (7.5 = ברירת המחדל).
   launchDrone: (dy = 0) => {
@@ -410,20 +425,43 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
         screenLayout: ScreenLayout.FULL_VIDEO,
   setScreenLayout: (layout) => {
     const s = get();
-    // כל עוד הרחפן לא המריא: פריסות עם חלונית חוזי אחת יציגו רובוט כברירת מחדל.
-    // (מסך מלא → slot1;  חצי-מפה + חוזי → slot2 היא החלונית החוזי).
-    if (!s.droneLaunched) {
-      if (layout === ScreenLayout.FULL_VIDEO && s.videoSlot1 !== 'robot') {
-        set({ screenLayout: layout, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1 });
-        return;
-      }
-      if (layout === ScreenLayout.SPLIT_VIDEO_MAP && s.videoSlot2 !== 'robot') {
-        set({ screenLayout: layout, videoSlot2: 'robot', videoSlot1: 'drone', activePane: 2 });
-        return;
-      }
+    if (layout === s.screenLayout) return;
+
+    // ===== שמירת רציפות: החלונית החוזי בפריסה החדשה תציג את מה שנצפה עד עכשיו =====
+    // לכל פריסה יש slot אחר שמזין את חלונית החוזי הראשית שלה:
+    //   מסך מלא → slot1 | חצי-מפה+חוזי → slot2 | חצי-חצי → הרבע הפעיל | מפה+2 → הרבע הפעיל.
+    // בלי ההתאמה הזו מעבר ממסך מלא של הרובוט אל חצי-מפה היה מציג פתאום את הרחפן.
+    let watching: VideoSource;
+    switch (s.screenLayout) {
+      case ScreenLayout.FULL_VIDEO:        watching = s.videoSlot1; break;
+      case ScreenLayout.SPLIT_VIDEO_MAP:   watching = s.videoSlot2; break;
+      case ScreenLayout.SPLIT_VIDEO_VIDEO: watching = s.activePane === 2 ? s.videoSlot2 : s.videoSlot1; break;
+      case ScreenLayout.MAP_TWO_VIDEO:     watching = s.activePane === 3 ? s.videoSlot1 : s.videoSlot2; break;
+      default:                             watching = s.videoSlot1;
     }
-    // אחרי המראה (או פריסות אחרות): נשאר מה שהיה אחרון
-    set({ screenLayout: layout });
+
+    // כל עוד הרחפן לא המריא אין לו חוזי, ולכן חלונית יחידה תמיד מציגה את הרובוט.
+    const primary: VideoSource = s.droneLaunched ? watching : 'robot';
+    const other: VideoSource = primary === 'robot' ? 'drone' : 'robot';
+
+    switch (layout) {
+      case ScreenLayout.FULL_VIDEO:
+        set({ screenLayout: layout, videoSlot1: primary, videoSlot2: other, activePane: 1 });
+        return;
+      case ScreenLayout.SPLIT_VIDEO_MAP:
+        // אזור 2 הוא חלונית החוזי היחידה, והיא מוזנת מ-slot2.
+        set({ screenLayout: layout, videoSlot2: primary, videoSlot1: other, activePane: 2 });
+        return;
+      case ScreenLayout.SPLIT_VIDEO_VIDEO:
+        set({ screenLayout: layout, videoSlot1: primary, videoSlot2: other, activePane: 1 });
+        return;
+      case ScreenLayout.MAP_TWO_VIDEO:
+        // אזור 2 מציג slot2 ואזור 3 מציג slot1.
+        set({ screenLayout: layout, videoSlot2: primary, videoSlot1: other, activePane: 2 });
+        return;
+      default:
+        set({ screenLayout: layout });
+    }
   },
   // ברירת מחדל: שתי החלוניות מתחילות ברובוט? לא — אסור כפילות.
   // slot1 = רובוט (ברירת מחדל), slot2 = רחפן (הערך ההפוך).
@@ -566,12 +604,12 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   resetRequest: 0,
 
   setSubjectAndStart: (id, name) => {
-    set({ subjectId: id, subjectName: name, appPhase: 'training', menuOpen: false, sessionComplete: false, viewMode: ViewMode.POV2, pov4: { ...POV4_DEFAULT }, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false });
+    set({ subjectId: id, subjectName: name, appPhase: 'training', menuOpen: false, sessionComplete: false, viewMode: ViewMode.POV2, pov4: { ...POV4_DEFAULT }, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false, targetDissolveAt: null });
     get().requestReset();
   },
 
   goToTraining: () => {
-    set({ appPhase: 'training', menuOpen: false, sessionComplete: false, viewMode: ViewMode.POV2, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false });
+    set({ appPhase: 'training', menuOpen: false, sessionComplete: false, viewMode: ViewMode.POV2, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false, targetDissolveAt: null });
     get().requestReset();
   },
 
@@ -582,7 +620,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
     // לפני שמתחילים סשן חדש — שומרים את המקטע שהיה פתוח בסשן הקודם (אם היה).
     get().flushOpenSegment();
     const t = Date.now();
-    set({ ...blankTimers, appPhase: 'session', currentSessionNumber: num, sessionComplete: false, menuOpen: false, viewMode: ViewMode.POV2, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false, _povDwell: {}, _povSince: t, _symDwell: {}, _symSince: t });
+    set({ ...blankTimers, appPhase: 'session', currentSessionNumber: num, sessionComplete: false, menuOpen: false, viewMode: ViewMode.POV2, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false, targetDissolveAt: null, _povDwell: {}, _povSince: t, _symDwell: {}, _symSince: t });
     get().requestReset();
   },
 
