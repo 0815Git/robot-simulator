@@ -86,7 +86,22 @@ const injectDirtShader = (shader: any) => {
     `
   );
 };
+// גרסת השיידר עבור גאומטריה ממוזגת: לאחר אפיית הטרנספורמים, `position` הוא
+// כבר מיקום עולמי, ולכן קוראים את המיקום המקומי המקורי מתוך התכונה aLocalPos
+// שהמאחד שומר. פרט לכך — אותו שיידר בדיוק, ולכן אותו מראה בדיוק.
+const injectDirtShaderMerged = (shader: any) => {
+  injectDirtShader(shader);
+  shader.vertexShader = shader.vertexShader
+    .replace('varying vec3 vLocalPos;', 'attribute vec3 aLocalPos;\nvarying vec3 vLocalPos;')
+    .replace('vLocalPos = position;', 'vLocalPos = aLocalPos;');
+};
+
 import { QuadraticBezierLine } from '@react-three/drei';
+import { mergeStaticTree } from './mergeStaticMeshes';
+
+// מטמון ברמת המודול: הכפר דטרמיניסטי, ולכן כל עותקי ה-World חולקים
+// את אותן גאומטריות ממוזגות במקום לייצר עותק לכל אחד.
+let mergedVillageCache: ReturnType<typeof mergeStaticTree> | null = null;
 
 /* ---------- פלטת חומרים ---------- */
 const PLASTER = ['#cfc6b4', '#c2b9a6', '#b8ae9a', '#d4ccbb', '#b0a48c', '#c8b596', '#a99e88', '#b98c66'];
@@ -556,7 +571,32 @@ export function DesertVillage({ visualsOnly = false }: { visualsOnly?: boolean }
     return out;
   }, [visualsOnly]);
 
-  return <>{elements}</>;
+  // ===== מיזוג גאומטריה סטטית (רק בנתיב הוויזואלי) =====
+  // הכפר הוא ~8,400 meshes נפרדים שמתחלקים ל-~75 חתימות חומר בלבד, והוא לא
+  // זז לעולם. מיזוג לפי חומר מוריד אותו מ-~5,000 קריאות ציור לחלונית ל-~75.
+  // נתיב הפיזיקה (visualsOnly=false) לא נוגע — הוא בסצנה שאינה מצוירת,
+  // והקוליידרים שם מוגדרים במפורש ולא נגזרים מהמֶשים.
+  // התוצאה נשמרת במטמון ברמת המודול, כך שכל עותקי ה-World חולקים גאומטריה אחת.
+  const rendered = useMemo(() => {
+    if (!visualsOnly) return elements;
+    if (!mergedVillageCache) {
+      mergedVillageCache = mergeStaticTree(elements, {
+        // הגרסה הממוזגת חייבת לקרוא את המיקום המקומי מתוך aLocalPos ולא מ-position,
+        // אחרת דפוס הלכלוך היה משתנה אחרי אפיית הטרנספורמים.
+        materialProps: (p) =>
+          p.onBeforeCompile === injectDirtShader
+            ? {
+                ...p,
+                onBeforeCompile: injectDirtShaderMerged,
+                customProgramCacheKey: () => 'dirty_concrete_shader_merged',
+              }
+            : p,
+      });
+    }
+    return mergedVillageCache;
+  }, [visualsOnly, elements]);
+
+  return <>{rendered}</>;
 }
 
 /* ---------- קומפוננטת הדמות עם המשגר ---------- */

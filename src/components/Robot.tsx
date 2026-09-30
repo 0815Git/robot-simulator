@@ -2,7 +2,7 @@
 import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { PerspectiveCamera } from '@react-three/drei';
-import { RigidBody, RapierRigidBody, CuboidCollider, CapsuleCollider, useRapier } from '@react-three/rapier';
+import { RigidBody, RapierRigidBody, CuboidCollider, CapsuleCollider, useRapier, useBeforePhysicsStep } from '@react-three/rapier';
 import * as THREE from 'three';
 import { useKeyboard } from '../hooks/useKeyboard';
 import { getGamepadAxes } from '../hooks/useGamepads';
@@ -44,6 +44,14 @@ const aimLockedRef = { current: false };
 const aimIdleTimeRef = { current: 0 };
 export const physicsEnv: { rapier: any, world: any } = { rapier: null, world: null };
 
+// ===== עצמי עזר להחלת ההנעה בתוך צעד הפיזיקה =====
+// הקולבק רץ עד 8 פעמים בפריים בקצב פריימים נמוך, ולכן לא מקצים כאן זיכרון.
+const _drvQuat = new THREE.Quaternion();
+const _drvRight = new THREE.Vector3();
+const _drvTargetVel = new THREE.Vector3();
+const _drvCurVel = new THREE.Vector3();
+const _drvImpulse = new THREE.Vector3();
+
 // נקודת הזינוק של הרובוט. הוזזה ל-z=7 (יותר קדימה) כי שטיח תחילת הניסוי (sensor-2)
 // הוזז ל-z=3.5 בעקבות מתיחת גבעה 1. כך הרובוט מתחיל לפני השטיח וחוצה אותו בנסיעה.
 const SPAWN = { x: 0, y: 1.5, z: 7 };
@@ -82,6 +90,8 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
   const lastResetRef = useRef(0);
   const prevEKeyRef = useRef(false);
   const prevLinkBtnRef = useRef(false);
+  // ריכוך הסיבוב העדין — מחושב ב-useFrame, נצרך בצעד הפיזיקה.
+  const fineTurnDampRef = useRef(1.0);
 
   // ===== מתגי פיזיקה - בשלב 0 הכל כבוי (התנהגות זהה למקור) =====
   const USE_IMPULSE_DRIVE = true;
@@ -537,47 +547,18 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       isFlippedRef.current = true;
     }
 
+    // ההנעה עצמה כבר לא מוחלת כאן — היא עברה ל-useBeforePhysicsStep שלמטה,
+    // כדי שתרוץ פעם אחת לכל צעד פיזיקלי ולא פעם אחת לכל פריים מצויר.
+    // כאן נשארת רק הכנת הפקודות.
     if (isFlippedRef.current) {
       trackSpeedL.current = 0;
       trackSpeedR.current = 0;
-    } else {
-      const curVel = bodyRef.current.linvel();
-      const curAng = bodyRef.current.angvel();
-      const avgSpeed = (trackSpeedL.current + trackSpeedR.current) / 2;
-
-      // האם הסיבוב נוצר מהכפתורים העדינים? (לחיצה על כפתור אחד = שני הצדדים אינם זהים)
-      const fineTurning = (hatLeft !== 0 || hatRight !== 0) && (hatLeft !== hatRight);
-      // עד כמה לרכך את הסיבוב העדין. מספר קטן יותר = סיבוב עדין ואיטי יותר.
-      const fineTurnDamp = fineTurning ? 0.45 : 1.0;
-
-      const angularVelY = (((trackSpeedR.current - trackSpeedL.current) / trackWidth) / 1.6) * fineTurnDamp;
-
-      if (USE_IMPULSE_DRIVE) {
-        // --- מצב Impulse (כבד) - כבוי כרגע ---
-        const m = bodyRef.current.mass();
-        const targetWorldVelocity = new THREE.Vector3(0, 0, -avgSpeed).applyQuaternion(quat);
-        if (CANCEL_LATERAL_DRIFT) {
-          const currentVelocityVec = new THREE.Vector3(curVel.x, curVel.y, curVel.z);
-          const lateralVelocity = currentVelocityVec.dot(rightVec);
-          const antiDriftImpulse = rightVec.clone().multiplyScalar(-lateralVelocity * m * 0.8);
-          bodyRef.current.applyImpulse(antiDriftImpulse, true);
-        }
-        const dvx = targetWorldVelocity.x - curVel.x;
-        const dvz = targetWorldVelocity.z - curVel.z;
-        const kLinear = 0.6;
-        bodyRef.current.applyImpulse({ x: dvx * m * kLinear, y: 0, z: dvz * m * kLinear }, true);
-      } else {
-        // --- המצב המקורי שלך (פעיל כרגע) ---
-        const worldVelocity = new THREE.Vector3(0, 0, -avgSpeed).applyQuaternion(quat);
-        bodyRef.current.setLinvel({ x: worldVelocity.x, y: curVel.y, z: worldVelocity.z }, true);
-      }
-
-      bodyRef.current.setAngvel({
-        x: ALLOW_PITCH_SWAY ? curAng.x : 0,
-        y: angularVelY,
-        z: ALLOW_PITCH_SWAY ? curAng.z : 0
-      }, true);
     }
+
+    // האם הסיבוב נוצר מהכפתורים העדינים? (לחיצה על כפתור אחד = שני הצדדים אינם זהים)
+    const fineTurning = (hatLeft !== 0 || hatRight !== 0) && (hatLeft !== hatRight);
+    // עד כמה לרכך את הסיבוב העדין. מספר קטן יותר = סיבוב עדין ואיטי יותר.
+    fineTurnDampRef.current = fineTurning ? 0.45 : 1.0;
 
     // הצלב מתעדכן בכל פריים כדי שלא ידלג.
     useTelemetryStore.getState().setCameraYaw(cameraYawRef.current);
@@ -588,6 +569,57 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       lastTimeRef.current = 0;
       setTelemetry(Math.round(pitch), Math.round(roll), isFlippedRef.current);
     }
+  });
+
+  // ===================================================================
+  // החלת ההנעה על הגוף הקשיח.
+  //
+  // רץ פעם אחת לכל *צעד פיזיקלי* (timeStep קבוע של 1/60), ולא פעם אחת לכל
+  // פריים מצויר. זה קריטי: Rapier מריץ 60/FPS צעדים בכל פריים
+  // (`while (accumulator >= timeStep) stepWorld(timeStep)`), והריסון והחיכוך
+  // פועלים בכל צעד. כשההנעה הוחלה בתוך useFrame היא הוחלה פעם אחת מול
+  // שמונה מחזורי ריסון ב-7.5 FPS, ולכן המהירות בפועל צנחה ב-36% בפריסות
+  // עמוסות. עכשיו יחס ההנעה-לריסון קבוע בכל קצב פריימים.
+  //
+  // אף פרמטר לא שונה (kLinear=0.6, 0.8 לביטול סחיפה, 1.6 לסיבוב), ולכן
+  // ההתנהגות ב-60 FPS זהה לחלוטין לקודמתה.
+  // ===================================================================
+  useBeforePhysicsStep(() => {
+    const body = bodyRef.current;
+    if (!body || isFlippedRef.current) return;
+
+    const rot = body.rotation();
+    const quat = _drvQuat.set(rot.x, rot.y, rot.z, rot.w);
+    const rightVec = _drvRight.set(-1, 0, 0).applyQuaternion(quat);
+
+    const curVel = body.linvel();
+    const curAng = body.angvel();
+    const avgSpeed = (trackSpeedL.current + trackSpeedR.current) / 2;
+    const angularVelY =
+      (((trackSpeedR.current - trackSpeedL.current) / trackWidth) / 1.6) * fineTurnDampRef.current;
+
+    if (USE_IMPULSE_DRIVE) {
+      const m = body.mass();
+      const targetWorldVelocity = _drvTargetVel.set(0, 0, -avgSpeed).applyQuaternion(quat);
+      if (CANCEL_LATERAL_DRIFT) {
+        const lateralVelocity = _drvCurVel.set(curVel.x, curVel.y, curVel.z).dot(rightVec);
+        _drvImpulse.copy(rightVec).multiplyScalar(-lateralVelocity * m * 0.8);
+        body.applyImpulse(_drvImpulse, true);
+      }
+      const dvx = targetWorldVelocity.x - curVel.x;
+      const dvz = targetWorldVelocity.z - curVel.z;
+      const kLinear = 0.6;
+      body.applyImpulse({ x: dvx * m * kLinear, y: 0, z: dvz * m * kLinear }, true);
+    } else {
+      const worldVelocity = _drvTargetVel.set(0, 0, -avgSpeed).applyQuaternion(quat);
+      body.setLinvel({ x: worldVelocity.x, y: curVel.y, z: worldVelocity.z }, true);
+    }
+
+    body.setAngvel({
+      x: ALLOW_PITCH_SWAY ? curAng.x : 0,
+      y: angularVelY,
+      z: ALLOW_PITCH_SWAY ? curAng.z : 0
+    }, true);
   });
 
   return (
