@@ -9,6 +9,8 @@ import { getGamepadAxes } from '../hooks/useGamepads';
 import { useTelemetryStore, ViewMode, ROCKET_MAN_POS, TARGET_RANGE_M } from '../store';
 // מיפוי ההגה (Logitech G920) יושב ב-src/wheelInput.ts — מקור-אמת יחיד לרובוט ולרחפן.
 import { decodeHatAxis, readWheelDrive } from '../wheelInput';
+import { PS_CAM_MOD_HELD } from './Drone';
+import { physicsEnv } from '../physicsEnv';
 export const physicalSpeeds = { left: 0, right: 0 };
 
 // Shared global refs for gamepad controls and camera direction to sync between components
@@ -21,7 +23,8 @@ const cameraPitchRef = { current: 0 };
 const aimTargetYawRef = { current: 0 };
 const aimLockedRef = { current: false };
 const aimIdleTimeRef = { current: 0 };
-export const physicsEnv: { rapier: any, world: any } = { rapier: null, world: null };
+// physicsEnv עבר ל-src/physicsEnv.ts; נשאר כאן כ-re-export כדי לא לשבור ייבואים קיימים.
+export { physicsEnv } from '../physicsEnv';
 
 // ===== עצמי עזר להחלת ההנעה בתוך צעד הפיזיקה =====
 // הקולבק רץ עד 8 פעמים בפריים בקצב פריימים נמוך, ולכן לא מקצים כאן זיכרון.
@@ -128,7 +131,10 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       const psRe = /dualsense|dualshock|wireless controller|054c|sony/i;
       // שלט PS: המראה בחץ העליון (B12) — רק במצב א'. על הרובוט = המראה; על הרחפן = עלייה בגובה.
       const psPad = allPads.find(p => p && psRe.test(p.id)) || null;
-      const psLaunch = st.steerMode === 'A' && !st.layoutMenuOpen && (psPad?.buttons?.[12]?.pressed || false);
+      // B6 מוחזק = 4 החצים שייכים לזווית מצלמת הרחפן, ולכן B12 אינו ממריא כרגע.
+      const psLaunch = st.steerMode === 'A' && !st.layoutMenuOpen
+        && !PS_CAM_MOD_HELD(psPad, st.steerMode)
+        && (psPad?.buttons?.[12]?.pressed || false);
 
       // Thrustmaster וכו': הדק-שמאל (B0/B5 של המכשיר השמאלי שאינו שלט ואינו הגה)
       const otherPads = allPads.filter(p => p && !/g920|logitech|racing wheel/i.test(p.id) && !psRe.test(p.id)) as Gamepad[];
@@ -148,10 +154,15 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
 
     // ===== נטרול המטרה — התאדות הדמות עם משגר הכתף =====
     // סימון ויזואלי למשתתפים בלבד: לא נשמר, לא נמדד ולא נכנס ל-CSV.
-    // זמני: מקש F במקלדת, עד שנחליט איזה כפתור בכל ג'ויסטיק יבצע זאת.
+    // מקש F במקלדת, או B8 בשלט ה-PlayStation (במצב ניהוג א', שבו מיפוי השלט פעיל).
     // רק הרובוט מבצע — הטווח נמדד ממנו, גם כשמסתכלים דרך חוזי הרחפן.
     {
-      const dissolveKey = !!keys.current['KeyF'];
+      const psReD = /dualsense|dualshock|wireless controller|054c|sony/i;
+      const psPadD = allPads.find(p => p && psReD.test(p.id)) || null;
+      const dissolveBtn =
+        useTelemetryStore.getState().steerMode === 'A' && (psPadD?.buttons?.[8]?.pressed || false);
+      // שני הפקדים מתנהגים זהה, כולל זיהוי *רגע* הלחיצה — כדי שהחזקה לא תפעיל שוב.
+      const dissolveKey = !!keys.current['KeyF'] || dissolveBtn;
       if (dissolveKey && !prevDissolveKeyRef.current) {
         const stT = useTelemetryStore.getState();
         if (stT.targetDissolveAt == null) {
