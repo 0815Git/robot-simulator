@@ -227,6 +227,25 @@ export default function App() {
       return false;
     };
 
+    // ===== הגה Logitech G920 — מכשיר נפרד לגמרי (משמש רק את מצב ניהוג 'C') =====
+    const isWheelPad = (p: Gamepad | null) => !!p && /g920|logitech|racing wheel/i.test(p.id);
+    const whPressed = (idx: number) => {
+      const pads = (navigator.getGamepads?.() || []);
+      for (const p of pads) {
+        if (isWheelPad(p) && p!.buttons[idx]?.pressed) return true;
+      }
+      return false;
+    };
+    const whJustPressed = (key: string, idx: number) => {
+      const now = whPressed(idx);
+      const fired = now && !prev[key];
+      prev[key] = now;
+      return fired;
+    };
+    // AXIS 5 של ההגה (צימוד): ערך-המנוחה נמדד בפריים הראשון, ומשם מזהים "לחיצה" כסטייה ממנו.
+    let ax5Rest: number | null = null;
+    let ax5Down = false;
+
     // כפתור לחוץ בשלט PS בלבד
     const psPressed = (idx: number) => {
       const pads = (navigator.getGamepads?.() || []);
@@ -345,6 +364,55 @@ export default function App() {
           // בזמן שהתפריט סגור — "בולעים" את תפקידי-החצים כדי שלא יזלגו בפתיחה
           prev['psRight'] = psPressed(1); prev['psLeft'] = psPressed(2);
           prev['psDown']  = psPressed(0); prev['psUp']   = psPressed(3);
+        }
+      }
+
+      // ===== כפתורי ההגה (Logitech G920) — פעילים רק כשמצב הניהוג 'C' =====
+      // B6 = תפריט לייאאוט (פתיחה / בחירה+סגירה). כשהתפריט פתוח: B3=מעלה, B0=מטה, B1=ימינה, B2=שמאלה.
+      // כשהתפריט סגור: B7 = מעבר שליטה בין חלונית הרובוט לחלונית הרחפן, AXIS 5 = צימוד רובוט⇄רחפן.
+      const whActive = st.steerMode === 'C' && (navigator.getGamepads?.() || []).some(isWheelPad);
+
+      if (whActive) {
+        // B6 — פותח/בוחר+סוגר את תפריט הלייאאוט
+        if (whJustPressed('whLayout', 6)) {
+          if (st.layoutMenuOpen) { st.setScreenLayout(LAYOUT_ORDER[st.layoutCursor]); st.closeLayoutMenu(); }
+          else { const cur = LAYOUT_ORDER.indexOf(st.screenLayout); st.setLayoutCursor(cur < 0 ? 0 : cur); st.openLayoutMenu(); }
+        }
+
+        if (st.layoutMenuOpen) {
+          // תפריט פתוח: רשת 2x2 (0 1 / 2 3). B1=ימינה, B2=שמאלה, B0=מטה, B3=מעלה
+          let c = st.layoutCursor;
+          if (whJustPressed('whRight', 1)) c = c % 2 === 0 ? c + 1 : c;
+          if (whJustPressed('whLeft', 2))  c = c % 2 === 1 ? c - 1 : c;
+          if (whJustPressed('whDown', 0))  c = c < 2 ? c + 2 : c;
+          if (whJustPressed('whUp', 3))    c = c >= 2 ? c - 2 : c;
+          if (c !== st.layoutCursor) st.setLayoutCursor(c);
+          // "בולעים" את התפקידים של מצב-סגור כדי שלא יזלגו ברגע הסגירה
+          prev['whPane'] = whPressed(7);
+        } else {
+          // B7 — מעביר שליטה בין החלוניות (בדיוק כמו B1 בג'ויסטיק / ריבוע בשלט PS)
+          if (whJustPressed('whPane', 7)) {
+            const layout = st.screenLayout;
+            if (layout === ScreenLayout.SPLIT_VIDEO_VIDEO) st.setActivePane(st.activePane === 1 ? 2 : 1);
+            else if (layout === ScreenLayout.MAP_TWO_VIDEO) st.setActivePane(st.activePane === 2 ? 3 : 2);
+            else if (layout === ScreenLayout.FULL_VIDEO) st.setVideoSlot(1, st.videoSlot1 === 'drone' ? 'robot' : 'drone');
+            else if (layout === ScreenLayout.SPLIT_VIDEO_MAP) st.setVideoSlot(2, st.videoSlot2 === 'drone' ? 'robot' : 'drone');
+          }
+
+          // AXIS 5 — צימוד/ניתוק רובוט⇄רחפן. הציר מדווח כערך רציף, ולכן מכיילים את ערך-המנוחה
+          // בפריים הראשון ומחשיבים "לחיצה" כסטייה משמעותית ממנו (עובד גם לציר שנח ב-0 וגם ב-±1).
+          const whPad = (navigator.getGamepads?.() || []).find(isWheelPad) || null;
+          const a5 = whPad?.axes?.[5];
+          if (typeof a5 === 'number') {
+            if (ax5Rest === null) ax5Rest = a5;
+            const down = Math.abs(a5 - ax5Rest) > 0.5;
+            if (down && !ax5Down) st.toggleDroneManual();
+            ax5Down = down;
+          }
+
+          // "בולעים" את כפתורי-החצים כדי שלא יזלגו ברגע פתיחת התפריט
+          prev['whRight'] = whPressed(1); prev['whLeft'] = whPressed(2);
+          prev['whDown']  = whPressed(0); prev['whUp']   = whPressed(3);
         }
       }
       raf = requestAnimationFrame(loop);

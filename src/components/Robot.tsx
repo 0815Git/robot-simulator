@@ -7,30 +7,9 @@ import * as THREE from 'three';
 import { useKeyboard } from '../hooks/useKeyboard';
 import { getGamepadAxes } from '../hooks/useGamepads';
 import { useTelemetryStore, ViewMode, ROCKET_MAN_POS, TARGET_RANGE_M } from '../store';
+// מיפוי ההגה (Logitech G920) יושב ב-src/wheelInput.ts — מקור-אמת יחיד לרובוט ולרחפן.
+import { decodeHatAxis, readWheelDrive } from '../wheelInput';
 export const physicalSpeeds = { left: 0, right: 0 };
-// ===== מיפוי הגה+דוושות Logitech G920 (steerMode 'C') =====
-const WHEEL_AXIS   = 0;   // ציר סיבוב ההגה
-const GAS_AXIS     = 1;   // דוושת גז (קדימה)
-const REVERSE_AXIS = 2;   // דוושת רוורס (אחורה)
-const GAS_BTN      = 1;   // כפתור B בהגה — גז קדימה
-const REVERSE_BTN  = 0;   // כפתור A בהגה — רוורס
-
-const WHEEL_RANGE     = 0.7;    // הטווח האמיתי של ההגה (±1 מלא)
-const WHEEL_DEADZONE  = 0.05;   // אזור מת קטן סביב המרכז
-const GAS_PRESSED     = -1.0;   // ערך דוושת הגז בלחיצה מלאה
-const REVERSE_PRESSED =  0.60;  // ערך דוושת הרוורס בלחיצה מלאה
-const STEER_STRENGTH  = 1.0;    // עוצמת הפנייה של ההגה
-const WHEEL_INVERT    = false;  // אם ההגה מפנה הפוך — true
-
-// ההגה: ±WHEEL_RANGE -> ±1, עם deadzone סביב 0
-const normWheel = (raw: number) => {
-  if (Math.abs(raw) < WHEEL_DEADZONE) return 0;
-  return Math.max(-1, Math.min(1, raw / WHEEL_RANGE));
-};
-
-// דוושה: מ-1 (נח) עד pressedVal (לחוץ מלא) -> 0..1
-const normPedal = (raw: number, pressedVal: number) =>
-  Math.max(0, Math.min(1, (1 - raw) / (1 - pressedVal)));
 
 // Shared global refs for gamepad controls and camera direction to sync between components
 const modeRef = { current: 'A' as 'A' | 'B' | 'C' };
@@ -156,7 +135,13 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       const leftPad = otherPads[0] || null;
       const tmLaunch = (leftPad?.buttons?.[0]?.pressed || leftPad?.buttons?.[5]?.pressed) || false;
 
-      if ((psLaunch || tmLaunch) && !atCeiling) {
+      // הגה G920 (מצב ג'): AXIS 9 למעלה = המראה מהרובוט. ברגע שהרחפן באוויר, המשך
+      // הטיפוס עובר ל-Drone.tsx (כדי שלא ייספר פעמיים באותו פריים).
+      const wheelPadL = allPads.find(p => p && /g920|logitech|racing wheel/i.test(p.id)) || null;
+      const wheelHatUp = decodeHatAxis(wheelPadL?.axes?.[9]).y < 0;
+      const whLaunch = st.steerMode === 'C' && !st.layoutMenuOpen && !st.droneLaunched && wheelHatUp;
+
+      if ((psLaunch || tmLaunch || whLaunch) && !atCeiling) {
         st.launchDrone(LAUNCH_SPEED * delta);
       }
     }
@@ -436,35 +421,10 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
 
     // ===== מצב ג': הגה + דוושות =====
     if (modeRef.current === 'C') {
-      const wAxes = wheelPad?.axes;
-      const wBtns = wheelPad?.buttons;
-
-      const wheelRaw   = wAxes?.[WHEEL_AXIS]   ?? 0;
-      const gasRaw     = wAxes?.[GAS_AXIS]     ?? 1;
-      const reverseRaw = wAxes?.[REVERSE_AXIS] ?? 1;
-
-      let wheel = normWheel(wheelRaw);
-      if (WHEEL_INVERT) wheel = -wheel;
-
-      // גז מהדוושה (0..1) או מכפתור B בהגה (בינארי מלא) — הגדול מביניהם
-      const gasPedal = normPedal(gasRaw, GAS_PRESSED);
-      const gasBtn   = wBtns?.[GAS_BTN]?.pressed ? 1 : 0;
-      const gas      = Math.max(gasPedal, gasBtn);
-
-      // רוורס מהדוושה (0..1) או מכפתור A בהגה (בינארי מלא) — הגדול מביניהם
-      const revPedal = normPedal(reverseRaw, REVERSE_PRESSED);
-      const revBtn   = wBtns?.[REVERSE_BTN]?.pressed ? 1 : 0;
-      const reverse  = Math.max(revPedal, revBtn);
-
-      // גז ורוורס מתקזזים
-      const drive = gas - reverse;              // -1..1
-      const steer = wheel * STEER_STRENGTH;
-
-      let L = drive + steer;
-      let R = drive - steer;
-      const norm = Math.max(1, Math.abs(L), Math.abs(R));
-      leftTargetInput  = L / norm;
-      rightTargetInput = R / norm;
+      // כשתפריט הלייאאוט פתוח — B0/B1 משמשים לדפדוף (מטה/ימינה), ולכן אינם גז/רוורס.
+      const w = readWheelDrive(wheelPad, { ignoreButtons: layoutMenuOpen });
+      leftTargetInput  = w.left;
+      rightTargetInput = w.right;
     }
 
     if (leftTargetInput === 0 && rightTargetInput === 0) {

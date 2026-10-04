@@ -11,6 +11,8 @@ import { PerspectiveCamera } from '@react-three/drei';
 import * as THREE from 'three';
 import { useTelemetryStore, ScreenLayout} from '../store';
 import { useKeyboard } from '../hooks/useKeyboard';
+// מיפוי ההגה + מפענח האט — משותף עם הרובוט, כדי שהתחושה תהיה זהה בשני הכלים.
+import { decodeHatAxis, isWheelPad, readWheelDrive } from '../wheelInput';
 
 const DEG2RAD = Math.PI / 180;
 // בסיס התקנת מצלמת המטען על גוף הרחפן (היסט במטרים, סיבוב במעלות [yaw,pitch,roll]).
@@ -81,17 +83,6 @@ const _flyDir = new THREE.Vector3();
 // ===== Thrustmaster A-10C (2 מכשירים) → רחפן =====
 // ריחוף ידני (סטיק/הדק/האט/B6-B8) או מעקב-רובוט (כפתור אפור B14-18).
 // המספרים תואמים למה שמופיע ב-gamepad-tester.com.
-
-// מפענח את האט (AXIS 9) לכיווני x/y.
-function decodeHatAxis(v: number | undefined): { x: number; y: number } {
-  if (v === undefined || v > 1.05 || v < -1.05) return { x: 0, y: 0 };
-  const idx = Math.round((v + 1) / (2 / 7));
-  const map: Record<number, { x: number; y: number }> = {
-    0: { x: 0, y: -1 }, 1: { x: 1, y: -1 }, 2: { x: 1, y: 0 }, 3: { x: 1, y: 1 },
-    4: { x: 0, y: 1 }, 5: { x: -1, y: 1 }, 6: { x: -1, y: 0 }, 7: { x: -1, y: -1 },
-  };
-  return map[idx] || { x: 0, y: 0 };
-}
 
 // משלב את שני ההאטים (ימין+שמאל) לכיוון אחד — כך הגובה/הסטה עובדים מכל ג'ויסטיק.
 function combinedHat(a: number | undefined, b: number | undefined): { x: number; y: number } {
@@ -171,9 +162,8 @@ export function DroneControls() {
         s.screenLayout === ScreenLayout.SPLIT_VIDEO_VIDEO ||
         s.screenLayout === ScreenLayout.MAP_TWO_VIDEO;
       const pads = navigator.getGamepads();
-      const isWheelP = (p: Gamepad | null) => !!p && /g920|logitech|racing wheel/i.test(p.id);
       const isPsP = (p: Gamepad | null) => !!p && /dualsense|dualshock|wireless controller|054c|sony/i.test(p.id);
-      const sticks = pads.filter(p => p && !isWheelP(p) && !isPsP(p)) as Gamepad[]; // Thrustmaster בלבד
+      const sticks = pads.filter(p => p && !isWheelPad(p) && !isPsP(p)) as Gamepad[]; // Thrustmaster בלבד
       const hasThrustmaster = sticks.length > 0;
 
       // שליטה בזווית מצלמת הרחפן עם סטיק שמאל, במקביל לנהיגה ברובוט — גם בצימוד וגם בלעדיו,
@@ -203,6 +193,23 @@ export function DroneControls() {
         }
       }
 
+      // ===== הגה G920 (מצב ג') — שליטת גובה גם כשעומדים על חלונית הרובוט =====
+      // AXIS 9 למעלה/למטה = טיפוס/ירידה. ההמראה עצמה (מהרובוט) מטופלת ב-Robot.tsx.
+      const whPadH = pads.find(isWheelPad) || null;
+      if (s.steerMode === 'C' && whPadH && s.droneLaunched) {
+        const hatW = decodeHatAxis(whPadH.axes?.[9]);
+        if (hatW.y !== 0) {
+          if (!s.droneManual) {
+            // צימוד: מפקדים את יעד גובה המעקב (הגובה בפועל זוחל אליו ברכוך, למטה).
+            s.setDroneFollowHeightTarget(s.droneFollowHeightTarget - hatW.y * DRONE_LINK_CLIMB_SPEED * delta);
+          } else {
+            const [dx, dy, dz] = s.dronePosition;
+            const ny = Math.max(0.5, Math.min(40, dy - hatW.y * DRONE_CLIMB_SPEED * delta));
+            if (ny !== dy) s.setDronePosition([dx, ny, dz]);
+          }
+        }
+      }
+
       // ריכוך גובה הצימוד: הגובה בפועל זוחל אל היעד דרך אותו קפיץ כמו בתנועה הידנית,
       // כדי שהתחושה והמהירות יהיו זהות למצב הלא-מצומד (ולא "קופצני" בגלל מערכת המעקב).
       if (!s.droneManual) {
@@ -227,8 +234,7 @@ export function DroneControls() {
 
     // --- מכשירים ---
     const allPads = navigator.getGamepads();
-    const isWheel = (p: Gamepad | null) => !!p && /g920|logitech|racing wheel/i.test(p.id);
-    const stickPads = allPads.filter(p => p && !isWheel(p)) as Gamepad[];
+    const stickPads = allPads.filter(p => p && !isWheelPad(p)) as Gamepad[];
         // --- שלט PS: מכשיר נפרד לגמרי. אם הוא מחובר, הרחפן מנוהג ממנו בלבד. ---
     const psPad = allPads.find(isPsPad) || null;
     const gpLeft  = stickPads[0] || null;
@@ -330,6 +336,54 @@ export function DroneControls() {
       let bodyYaw = s.droneYaw;
       let bodyPitch = s.droneBodyPitch;   // הטיית האף מעלה/מטה (מתכנסת אל העיגול בזמן הדק)
       const step = FLY_SPEED * delta;
+
+      // ===== הגה G920 (מצב ג'): גז/ברקס/הגה = נהיגה, AXIS 9 = גובה + הליכה סרטנית, B4/B5 = אף =====
+      const wheelPadF = allPads.find(isWheelPad) || null;
+      if (wheelPadF && s.steerMode === 'C') {
+        const [px, py, pz] = s.dronePosition;
+        let nx = px, ny = py, nz = pz;
+
+        // B4 = הרמת האף, B5 = הורדת האף. הזווית נשמרת עד שמחזירים אותה ידנית.
+        const wb = wheelPadF.buttons;
+        const NOSE_MAX_ANGLE = Math.PI / 4;   // ±45°
+        const NOSE_RATE = 1.2;                // rad/s
+        if (wb?.[4]?.pressed) bodyPitch += NOSE_RATE * delta;
+        if (wb?.[5]?.pressed) bodyPitch -= NOSE_RATE * delta;
+        bodyPitch = Math.max(-NOSE_MAX_ANGLE, Math.min(NOSE_MAX_ANGLE, bodyPitch));
+        if (bodyPitch !== s.droneBodyPitch) s.setDroneBodyPitch(bodyPitch);
+
+        // ===== גז / ברקס / הגה — בדיוק אותו מיקס דיפרנציאלי שמניע את הרובוט =====
+        // readWheelDrive מחזיר את אותם left/right שהזחלים מקבלים. כאן מתרגמים אותם
+        // לרחפן: הממוצע = תנועה קדימה/אחורה לכיוון האף, וההפרש = סיבוב הגוף.
+        // כך גז+הגה מלא מסובב סביב "זחל עומד" בדיוק כמו ברובוט, וההגה לבדו מסובב במקום.
+        const w = readWheelDrive(wheelPadF);
+        const fwd  = (w.left + w.right) / 2;   // -1..1
+        const turn = w.right - w.left;         // ימינה = שלילי → היאו קטן, כמו ברובוט
+        bodyYaw += turn * DIFF_YAW_RATE * delta;
+
+        const fX = -Math.sin(bodyYaw), fZ = -Math.cos(bodyYaw);
+        // ציר "ימינה" של גוף הרחפן — ההסטה הצידה נעשית יחסית לאף, ולכן זו הליכה סרטנית.
+        const rX = Math.cos(bodyYaw), rZ = -Math.sin(bodyYaw);
+
+        // תנועה קדימה/אחורה לפי הדוושות. כשהאף מוטה — חלק מהמהירות הופך לטיפוס/צניחה,
+        // בדיוק כמו בנתיב ההדק של הג'ויסטיק.
+        const horiz = fwd * Math.cos(bodyPitch);
+        nx += fX * horiz * step; nz += fZ * horiz * step;
+        ny += Math.sin(bodyPitch) * fwd * step;
+
+        const hatW = decodeHatAxis(wheelPadF.axes?.[9]);
+        nx += rX * hatW.x * HAT_STRAFE_RATE * step;
+        nz += rZ * hatW.x * HAT_STRAFE_RATE * step;
+        // האט מעלה (y=-1) = טיפוס, למטה (y=+1) = ירידה
+        ny += -hatW.y * DRONE_CLIMB_SPEED * delta;
+
+        if (nx !== px || ny !== py || nz !== pz) {
+          s.setDronePosition([nx, Math.max(0.5, Math.min(40, ny)), nz]);
+        }
+        if (bodyYaw !== s.droneYaw) s.setDroneYaw(bodyYaw);
+        lastWritten.current = null; // בחזרה לג'ויסטיקים — לסנכרן מחדש את יעד הקפיץ
+        return;
+      }
 
             // ===== ניהוג זחלים בשלט PS — רק כשמחובר שלט PS וגם מצב הניהוג 'A' (בלי ריכוך) =====
       if (psPad && s.steerMode === 'A') {
