@@ -11,6 +11,17 @@ import { useTelemetryStore, ViewMode, ROCKET_MAN_POS, TARGET_RANGE_M } from '../
 import { decodeHatAxis, readWheelDrive } from '../wheelInput';
 import { PS_CAM_MOD_HELD } from './Drone';
 import { physicsEnv } from '../physicsEnv';
+// שכבת-תאימות הג'ויסטיקים (A10C ⇄ Solaris). לא נוגעת בצירים 0/1.
+import {
+  launchPressed as padLaunch,
+  triggerPressed as padTrigger,
+  fineDriveDir,
+  coarseDriveDir,
+  cameraPanX,
+  btnMapOf,
+  isSolaris,
+  sortGrips,
+} from '../controllerConfig';
 export const physicalSpeeds = { left: 0, right: 0 };
 
 // Shared global refs for gamepad controls and camera direction to sync between components
@@ -139,7 +150,8 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       // Thrustmaster וכו': הדק-שמאל (B0/B5 של המכשיר השמאלי שאינו שלט ואינו הגה)
       const otherPads = allPads.filter(p => p && !/g920|logitech|racing wheel/i.test(p.id) && !psRe.test(p.id)) as Gamepad[];
       const leftPad = otherPads[0] || null;
-      const tmLaunch = (leftPad?.buttons?.[0]?.pressed || leftPad?.buttons?.[5]?.pressed) || false;
+      // A10C: B0/B5 של הגריף השמאלי. Solaris: ההדק (B23). שניהם דרך padLaunch.
+      const tmLaunch = padLaunch(leftPad);
 
       // הגה G920 (מצב ג'): AXIS 9 למעלה = המראה מהרובוט. ברגע שהרחפן באוויר, המשך
       // הטיפוס עובר ל-Drone.tsx (כדי שלא ייספר פעמיים באותו פריים).
@@ -181,7 +193,8 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       const st2 = useTelemetryStore.getState();
       const psRe2 = /dualsense|dualshock|wireless controller|054c|sony/i;
       const sticks2 = allPads.filter(p => p && !/g920|logitech|racing wheel/i.test(p.id) && !psRe2.test(p.id)) as Gamepad[];
-      const b2Now = st2.steerMode === 'B' && sticks2.some(p => p.buttons?.[2]?.pressed);
+      // צימוד/ניתוק: A10C = B2, Solaris = B27. לכל התקן האינדקס שלו דרך btnMapOf.
+      const b2Now = st2.steerMode === 'B' && sticks2.some(p => p.buttons?.[btnMapOf(p).droneLink]?.pressed);
       if (b2Now && !prevLinkBtnRef.current) {
         st2.toggleDroneManual();
       }
@@ -210,8 +223,10 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
     const wheelPad = allPads.find(isWheel) || null;
     const stickPads = allPads.filter(p => p && !isWheel(p));
 
-    const gpLeft  = stickPads[0] || null;  // ג'ויסטיק שמאל (רק סטיקים אמיתיים)
-    const gpRight = stickPads[1] || null;  // ג'ויסטיק ימין
+    // Solaris: נעילת שמאל/ימין לפי product id. A10C: סדר החיבור כמקודם.
+    const ordered = sortGrips(stickPads);
+    const gpLeft  = ordered[0] || null;  // ג'ויסטיק שמאל
+    const gpRight = ordered[1] || null;  // ג'ויסטיק ימין
 
     const axesLeft = gpLeft?.axes;
     const axesRight = gpRight?.axes;
@@ -247,9 +262,15 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
     // B3 עבר לשמש את מחזור ה-POV (ב-App.tsx). כאן הוא כבר לא מחליף מצב ניהוג.
     const b3Pressed = btnsRight?.[3]?.pressed || false;
     prevB3Ref.current = b3Pressed;
-    // כפתור ריבוע (2) בשלט PS יחיד: החלפת כיוון ציר ה-Y של הצלב.
-    // רק כשאין ג'ויסטיקים גדולים מחוברים. סופרים רק את רגע הלחיצה.
-    const squarePressed = !axesRight && (gpLeft?.buttons?.[2]?.pressed || false);
+    // היפוך כיוון ציר ה-Y של הצלב.
+    //   • שלט PS יחיד: כפתור ריבוע (2), רק כשאין ג'ויסטיקים גדולים מחוברים.
+    //   • Solaris: כפתור ייעודי (btnMapOf.invertY) בכל אחד מהגריפים.
+    // סופרים רק את רגע הלחיצה (ראו prevSquareRef למטה).
+    const solarisSticks = isSolaris(gpLeft) || isSolaris(gpRight);
+    const squarePressed = solarisSticks
+      ? ((gpLeft?.buttons?.[btnMapOf(gpLeft).invertY]?.pressed) ||
+         (gpRight?.buttons?.[btnMapOf(gpRight).invertY]?.pressed) || false)
+      : (!axesRight && (gpLeft?.buttons?.[2]?.pressed || false));
     if (squarePressed && !prevSquareRef.current) {
       aimInvertYRef.current = !aimInvertYRef.current;
       console.log("Aim Y-axis inverted:", aimInvertYRef.current);
@@ -259,10 +280,10 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
     // כשתפריט הלייאאוט פתוח — B10-13 שייכים לדפדוף בתפריט, אז הרובוט מתעלם מהם לגמרי
     const layoutMenuOpen = useTelemetryStore.getState().layoutMenuOpen;
 
-    // מצב א' בלבד: פאן מצלמה בכפתורים. כל טיפול הצלב של מצב ב' עבר לבלוק ההדק למטה.
+    // מצב א' בלבד: פאן מצלמה. A10C = כפתורים B11/B13, Solaris = ציר 3 (מיני-סטיק ימני).
+    // cameraPanX מחזיר −1..1 (חיובי = ימינה) לשתי המשפחות. כל טיפול הצלב של מצב ב' למטה.
     if (modeRef.current === 'A' && !layoutMenuOpen) {
-      if (btnsRight?.[11]?.pressed) cameraYawRef.current -= CAM_PAN_RATE * delta;
-      if (btnsRight?.[13]?.pressed) cameraYawRef.current += CAM_PAN_RATE * delta;
+      cameraYawRef.current += cameraPanX(gpRight) * CAM_PAN_RATE * delta;
     }
 
     let mainLeft = 0;
@@ -281,23 +302,20 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
         mainRight = shapeStick(-(axesLeft[3] ?? 0), cfg);
       }
     } else {
-      // מצב ב': ניהוג גס דרך כפתורים 10/12 — מושתק כשתפריט הלייאאוט פתוח.
+      // מצב ב': ניהוג גס — מושתק כשתפריט הלייאאוט פתוח.
+      // A10C = כפתורים B10/B12. Solaris = אין נהיגה גסה (coarseDriveDir מחזיר 0),
+      // כי ה-HAT מוקדש לנהיגה עדינה בלבד (ראו fineDriveDir למטה).
       if (axesRight && !layoutMenuOpen) {
-        if (btnsLeft?.[10]?.pressed) mainLeft = 1;
-        else if (btnsLeft?.[12]?.pressed) mainLeft = -1;
-        if (btnsRight?.[10]?.pressed) mainRight = 1;
-        else if (btnsRight?.[12]?.pressed) mainRight = -1;
+        mainLeft = coarseDriveDir(gpLeft);
+        mainRight = coarseDriveDir(gpRight);
       }
     }
 
-    // ניהוג עדין דרך כפתורים B6 (קדימה) ו-B8 (אחורה) - פעיל בשני המצבים (א' וגם ב')
-    let hatLeft = 0;
-    let hatRight = 0;
-    if (btnsLeft?.[6]?.pressed) hatLeft = 1 * fineMultiplier;
-    else if (btnsLeft?.[8]?.pressed) hatLeft = -1 * fineMultiplier;
-
-    if (btnsRight?.[6]?.pressed) hatRight = 1 * fineMultiplier;
-    else if (btnsRight?.[8]?.pressed) hatRight = -1 * fineMultiplier;
+    // ניהוג עדין — פעיל בשני המצבים (א' וגם ב').
+    // A10C: כפתורים B6(קדימה)/B8(אחורה). Solaris: ה-HAT (ציר 9) מעלה/מטה.
+    // fineDriveDir מחזיר −1/0/+1 לכל גריף, ואנו מכפילים במכפיל העדינות.
+    let hatLeft = fineDriveDir(gpLeft) * fineMultiplier;
+    let hatRight = fineDriveDir(gpRight) * fineMultiplier;
     // ניהוג עדין במצב א' דרך שלט PS יחיד (רק כשאין ג'ויסטיקים גדולים מחוברים).
     // L2 (הדק שמאלי, כפתור 6) = זחל שמאל עדין קדימה, L1 (כפתור 4) = אחורה.
     // R2 (הדק ימני, כפתור 7)  = זחל ימין עדין קדימה,  R1 (כפתור 5) = אחורה.
@@ -327,8 +345,9 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
     let rightTargetInput = mainRight + hatRight;
 
     // ההדק פועל אך ורק במצב ב'. במצב א' הוא מנוטרל לגמרי.
+    // A10C = B0 של הגריף הימני. Solaris = B23. שניהם דרך padTrigger.
     const singleTrigger = !axesRight && (gpLeft?.buttons?.[7]?.pressed || false);
-    const triggerPressed = modeRef.current === 'B' && ((btnsRight?.[0]?.pressed || false) || singleTrigger);
+    const triggerPressed = modeRef.current === 'B' && (padTrigger(gpRight) || singleTrigger);
 
     if (modeRef.current === 'B') {
       // שני ג'ויסטיקים: הסטיק הימני. שלט PS יחיד: הסטיק הימני = צירים 2 ו-3.

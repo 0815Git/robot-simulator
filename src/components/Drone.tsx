@@ -89,6 +89,16 @@ const _camPos = new THREE.Vector3();
 const _camOffset = new THREE.Vector3();
 const _flyDir = new THREE.Vector3();
 
+// שכבת-תאימות הג'ויסטיקים (A10C ⇄ Solaris). לא נוגעת בצירים 0/1 (צלב/גימבל).
+import {
+  triggerPressed as padTrigger,
+  fineDriveDir,
+  droneHeightAxis,
+  droneStrafeAxis,
+  isSolaris,
+  sortGrips,
+} from '../controllerConfig';
+
 // ===== Thrustmaster A-10C (2 מכשירים) → רחפן =====
 // ריחוף ידני (סטיק/הדק/האט/B6-B8) או מעקב-רובוט (כפתור אפור B14-18).
 // המספרים תואמים למה שמופיע ב-gamepad-tester.com.
@@ -150,17 +160,21 @@ export function DroneControls() {
           const padsX = navigator.getGamepads();
           const isWheelX = (p: Gamepad | null) => !!p && /g920|logitech|racing wheel/i.test(p.id);
           const isPsX = (p: Gamepad | null) => !!p && /dualsense|dualshock|wireless controller|054c|sony/i.test(p.id);
-          const stx = padsX.filter(p => p && !isWheelX(p) && !isPsX(p)) as Gamepad[]; // Thrustmaster בלבד
+          const stx = sortGrips(padsX.filter(p => p && !isWheelX(p) && !isPsX(p))); // Solaris: נעול לפי id
           const gL = stx[0] || null, gR = stx[1] || null;
-          // פקד טיסה = כפתורי ניהוג B6/B8 בכל צד, או ה-hat (ציר 9) של אחד המכשירים
-          const flyBtn =
-            gL?.buttons?.[6]?.pressed || gL?.buttons?.[8]?.pressed ||
-            gR?.buttons?.[6]?.pressed || gR?.buttons?.[8]?.pressed || false;
-          const hatV = (gR?.axes?.[9] !== undefined) ? gR.axes[9] : gL?.axes?.[9];
-          const hatDecoded = decodeHatAxis(hatV);
-          const hatActive = hatDecoded.x !== 0 || hatDecoded.y !== 0;
+          // פקד טיסה פעיל = נהיגה דיפרנציאלית (A10C: B6/B8 · Solaris: HAT) בכל צד,
+          // או גובה/הסטה (A10C: HAT · Solaris: צירים 4/3 בגריף הימני).
+          const flyBtn = fineDriveDir(gL) !== 0 || fineDriveDir(gR) !== 0;
+          let vertStrafeActive: boolean;
+          if (isSolaris(gR)) {
+            vertStrafeActive = droneHeightAxis(gR) !== 0 || droneStrafeAxis(gR) !== 0;
+          } else {
+            const hatV = (gR?.axes?.[9] !== undefined) ? gR.axes[9] : gL?.axes?.[9];
+            const hatDecoded = decodeHatAxis(hatV);
+            vertStrafeActive = hatDecoded.x !== 0 || hatDecoded.y !== 0;
+          }
 
-          if (flyBtn || hatActive) {
+          if (flyBtn || vertStrafeActive) {
             s.setDroneLink(false); // מנתק צימוד → droneManual=true
             return;
           }
@@ -172,7 +186,7 @@ export function DroneControls() {
         s.screenLayout === ScreenLayout.MAP_TWO_VIDEO;
       const pads = navigator.getGamepads();
       const isPsP = (p: Gamepad | null) => !!p && /dualsense|dualshock|wireless controller|054c|sony/i.test(p.id);
-      const sticks = pads.filter(p => p && !isWheelPad(p) && !isPsP(p)) as Gamepad[]; // Thrustmaster בלבד
+      const sticks = sortGrips(pads.filter(p => p && !isWheelPad(p) && !isPsP(p))); // Solaris: נעול לפי id
       const hasThrustmaster = sticks.length > 0;
 
       // שליטה בזווית מצלמת הרחפן עם סטיק שמאל, במקביל לנהיגה ברובוט — גם בצימוד וגם בלעדיו,
@@ -187,16 +201,21 @@ export function DroneControls() {
         if (Math.abs(ly) > DZ) pitch += ly * PR * delta;
         if (yaw !== s.droneGimbalYaw || pitch !== s.droneGimbalPitch) s.setDroneGimbal(yaw, pitch);
 
-        // גובה הרחפן עם ההאט (משני הג'ויסטיקים) — פעיל גם בצימוד וגם בלעדיו.
-        const hatLink = combinedHat(sticks[1]?.axes?.[9], sticks[0]?.axes?.[9]);
-        if (hatLink.y !== 0) {
+        // גובה הרחפן — פעיל גם בצימוד וגם בלעדיו.
+        //   • A10C: ה-HAT (ציר 9) משני הג'ויסטיקים.
+        //   • Solaris: ציר 4 של הגריף הימני (ה-HAT תפוס לנהיגה ברובוט).
+        // climbCmd חיובי = עלייה בשתי המשפחות.
+        const climbCmd = isSolaris(sticks[1] || sticks[0] || null)
+          ? droneHeightAxis(sticks[1] || sticks[0] || null)
+          : -combinedHat(sticks[1]?.axes?.[9], sticks[0]?.axes?.[9]).y;
+        if (climbCmd !== 0) {
           if (!s.droneManual) {
             // צימוד: מפקד את יעד גובה המעקב (הגובה בפועל זוחל אליו ברכוך, למטה).
-            s.setDroneFollowHeightTarget(s.droneFollowHeightTarget - hatLink.y * DRONE_LINK_CLIMB_SPEED * delta);
+            s.setDroneFollowHeightTarget(s.droneFollowHeightTarget + climbCmd * DRONE_LINK_CLIMB_SPEED * delta);
           } else {
             // בלי צימוד: הרחפן מרחף — משנים ישירות את גובהו המוחלט.
             const [dx, dy, dz] = s.dronePosition;
-            const ny = Math.max(0.5, Math.min(40, dy - hatLink.y * DRONE_CLIMB_SPEED * delta));
+            const ny = Math.max(0.5, Math.min(40, dy + climbCmd * DRONE_CLIMB_SPEED * delta));
             // גם ירידה בגובה נבדקת — אחרת הרחפן היה שוקע לתוך מדרון/גג.
             if (ny !== dy) s.setDronePosition(resolveDroneMove([dx, dy, dz], [dx, ny, dz]).pos);
           }
@@ -244,7 +263,8 @@ export function DroneControls() {
 
     // --- מכשירים ---
     const allPads = navigator.getGamepads();
-    const stickPads = allPads.filter(p => p && !isWheelPad(p)) as Gamepad[];
+    // Solaris: נעילת שמאל/ימין לפי product id. A10C: סדר החיבור כמקודם.
+    const stickPads = sortGrips(allPads.filter(p => p && !isWheelPad(p)));
         // --- שלט PS: מכשיר נפרד לגמרי. אם הוא מחובר, הרחפן מנוהג ממנו בלבד. ---
     const psPad = allPads.find(isPsPad) || null;
     const gpLeft  = stickPads[0] || null;
@@ -261,16 +281,19 @@ export function DroneControls() {
     // ===== האם הרחפן מוטס כרגע (ג'ויסטיקים, מצב ב', ריחוף ידני)? =====
     // "מוטס" = יש פקד תנועה פעיל: הדק (B0), ניהוג דיפרנציאלי (B6/B8 בכל צד),
     // האט (ציר 9), או מקשי טיסה במקלדת. כשאין אף אחד מהם — הרחפן עומד במקום.
-    const isTm = gpLeft && !isPsPad(gpLeft); // ג'ויסטיק Thrustmaster (לא שלט PS)
+    const isTm = gpLeft && !isPsPad(gpLeft); // ג'ויסטיק Thrustmaster/Solaris (לא שלט PS)
     let droneFlying = false;
     if (s.droneManual && s.steerMode === 'B' && isTm) {
-      const triggerHeld = bt?.[0]?.pressed || false;
-      const diffDriveHeld =
-        (bt?.[6]?.pressed || bt?.[8]?.pressed || btL?.[6]?.pressed || btL?.[8]?.pressed) || false;
+      const triggerHeld = padTrigger(gpRight);
+      // נהיגה דיפרנציאלית: A10C = B6/B8, Solaris = ה-HAT (fineDriveDir בכל גריף).
+      const diffDriveHeld = fineDriveDir(gpLeft) !== 0 || fineDriveDir(gpRight) !== 0;
+      // גובה/strafe: A10C = ה-HAT (ציר 9), Solaris = מיני-סטיק ימני (צירים 4/3).
       const hatFly = combinedHat(ax?.[9], gpLeft?.axes?.[9]);
-      const hatHeld = hatFly.x !== 0 || hatFly.y !== 0;
+      const vertStrafeHeld = isSolaris(gpRight)
+        ? (droneHeightAxis(gpRight) !== 0 || droneStrafeAxis(gpRight) !== 0)
+        : (hatFly.x !== 0 || hatFly.y !== 0);
       const kbFly = !!(k['KeyI'] || k['KeyK'] || k['KeyU'] || k['KeyO'] || k['Space'] || k['ControlLeft'] || k['ControlRight']);
-      droneFlying = triggerHeld || diffDriveHeld || hatHeld || kbFly;
+      droneFlying = triggerHeld || diffDriveHeld || vertStrafeHeld || kbFly;
     }
 
     // ===== גימבל =====
@@ -338,7 +361,7 @@ export function DroneControls() {
 
     // חזרה הדרגתית של העיגול אל המרכז כשלא מטיסים לכיוונו:
     // ההדק לא לחוץ (לא "נוסעים" לכיוון) והסטיק אינו מוזז — בדיוק כמו צלב הכוונת ברובוט.
-    const aimTriggerHeld = bt?.[0]?.pressed || false;
+    const aimTriggerHeld = padTrigger(gpRight);
     if (s.droneManual && !aimTriggerHeld && !touchingAim) {
       aimIdleTime.current += delta;
       if (aimIdleTime.current > DRONE_AIM_IDLE_DELAY) {
@@ -473,9 +496,9 @@ export function DroneControls() {
       const [px, py, pz] = targetPos.current;
       let nx = px, ny = py, nz = pz;
 
-      // ניהוג דיפרנציאלי (B6=קדימה, B8=אחורה, בכל צד)
-      const rightSide = bt?.[6]?.pressed ? 1 : (bt?.[8]?.pressed ? -1 : 0);
-      const leftSide  = btL?.[6]?.pressed ? 1 : (btL?.[8]?.pressed ? -1 : 0);
+      // ניהוג דיפרנציאלי. A10C: B6(קדימה)/B8(אחורה) בכל צד. Solaris: ה-HAT בכל גריף.
+      const rightSide = fineDriveDir(gpRight);
+      const leftSide  = fineDriveDir(gpLeft);
       const drive = (leftSide + rightSide) / 2;
       const turn  = rightSide - leftSide;
       bodyYaw += turn * DIFF_YAW_RATE * delta;
@@ -484,11 +507,21 @@ export function DroneControls() {
       const rX =  Math.cos(bodyYaw), rZ = -Math.sin(bodyYaw);
       nx += fX * drive * step; nz += fZ * drive * step;
 
-      // האט (AXIS 9): מעלה/מטה = גובה, שמאל/ימין = הצידה — עובד משני הג'ויסטיקים.
-      const hat = combinedHat(ax?.[9], gpLeft?.axes?.[9]);
-      ny += -hat.y * DRONE_CLIMB_SPEED * delta;          // גובה — קצב נשלט ע"י DRONE_CLIMB_SPEED
-      nx += rX * hat.x * HAT_STRAFE_RATE * step;
-      nz += rZ * hat.x * HAT_STRAFE_RATE * step;
+      // גובה + הסטה הצידה.
+      //   • A10C: ה-HAT (ציר 9) — מעלה/מטה = גובה, שמאל/ימין = הצידה, משני הג'ויסטיקים.
+      //   • Solaris: מיני-סטיק ימני — ציר 4 = גובה, ציר 3 = הצידה (ה-HAT תפוס לנהיגה).
+      let climbInput: number, strafeInput: number;
+      if (isSolaris(gpRight)) {
+        climbInput  = droneHeightAxis(gpRight);  // +1 = עלייה
+        strafeInput = droneStrafeAxis(gpRight);  // +1 = ימינה
+      } else {
+        const hat = combinedHat(ax?.[9], gpLeft?.axes?.[9]);
+        climbInput  = -hat.y;  // hat up (y=-1) = עלייה
+        strafeInput = hat.x;
+      }
+      ny += climbInput * DRONE_CLIMB_SPEED * delta;      // גובה — קצב נשלט ע"י DRONE_CLIMB_SPEED
+      nx += rX * strafeInput * HAT_STRAFE_RATE * step;
+      nz += rZ * strafeInput * HAT_STRAFE_RATE * step;
 
       // גיבוי מקלדת (יחסית לכיוון הגוף)
       if (k['KeyI']) { nx += fX * step; nz += fZ * step; }
@@ -499,7 +532,8 @@ export function DroneControls() {
       if (k['ControlLeft'] || k['ControlRight']) ny -= DRONE_CLIMB_SPEED * delta;
 
       // --- ההדק: אופקי = סיבוב הגוף (מתכנס); אנכי = הטיית האף אל העיגול ---
-      const trigger = bt?.[0]?.pressed || false;
+      // A10C = B0 של הגריף הימני. Solaris = B23. שניהם דרך padTrigger.
+      const trigger = padTrigger(gpRight);
       if (trigger) {
         const AIM_MAX_ANGLE = 0.7, DRIVE_SPEED = 1.0, TURN_SLOWDOWN = 0.3, DRONE_TURN_RATE = 2.2;
         const ndx = aimX / AIM_MAX_PX;   // -1..1 (ימין חיובי)

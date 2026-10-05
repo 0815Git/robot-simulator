@@ -21,6 +21,11 @@ import { VideoSourcePicker } from './components/VideoSourcePicker';
 import { MapLabels } from './components/MapLabels';
 import { MapView } from './components/MapView';
 import { useTelemetryStore, ViewMode, ScreenLayout } from './store';
+// שכבת-תאימות הג'ויסטיקים (A10C ⇄ Solaris) — מיפוי כפתורים גלובליים + ניווט בתפריט.
+import {
+  isSolaris, isSolarisRightGrip, btnMapOf, menuNavDir,
+  type ButtonMap,
+} from './controllerConfig';
 
 // כיסוי שחור לחלונית חוזי שמוגדרת לרחפן אך הרחפן עדיין לא המריא (אין לו חוזי)
 function DroneOffCover({ slot }: { slot: 1 | 2 }) {
@@ -211,6 +216,8 @@ export default function App() {
 
     // זיכרון מצב-קודם לכל כפתור, כדי לפעול רק ברגע הלחיצה (לא בכל פריים שהוא מוחזק)
     const prev: Record<string, boolean> = {};
+    // זיכרון מצב-קודם לכיווני המיני-סטיק (Solaris) לנעילת-קצה בניווט בתפריט
+    const prevAxis: Record<string, number> = {};
     let raf = 0;
 
     const isPs = (p: Gamepad | null) => !!p && /dualsense|dualshock|wireless controller|054c|sony/i.test(p.id);
@@ -268,11 +275,33 @@ export default function App() {
       return fired;
     };
 
+    // ===== גרסה "לוגית" לכפתורים הגלובליים — מתורגמת לכל משפחת ג'ויסטיק =====
+    // A10C וה-Solaris נותנים אינדקסים שונים לאותה פעולה; btnMapOf בוחר את הנכון
+    // לכל התקן. כך B1/B3/B4 של ה-A10C ו-B25/B16/B15 של ה-Solaris מפעילים אותו דבר.
+    const anyLogical = (role: keyof ButtonMap) => {
+      const pads = (navigator.getGamepads?.() || []);
+      for (const p of pads) {
+        if (!p) continue;
+        if (/g920|logitech|racing wheel/i.test(p.id)) continue; // הגה
+        if (isPs(p)) continue;                                   // שלט PS מטופל בנפרד
+        const idx = btnMapOf(p)[role];
+        if (idx != null && p.buttons[idx]?.pressed) return true;
+      }
+      return false;
+    };
+    const logicalJustPressed = (key: string, role: keyof ButtonMap) => {
+      const now = anyLogical(role);
+      const fired = now && !prev[key];
+      prev[key] = now;
+      return fired;
+    };
+
     const loop = () => {
       const st = useTelemetryStore.getState();
 
-      // --- B1: פריסות עם 2 חוזי → מעביר שליטה; פריסות עם חוזי אחד → מחליף את תוכן החלונית ---
-      if (justPressed('b1', 1)) {
+      // --- מעבר שליטה/החלפת תוכן: A10C=B1, Solaris=B25 ---
+      // פריסות עם 2 חוזי → מעביר שליטה; פריסות עם חוזי אחד → מחליף את תוכן החלונית
+      if (logicalJustPressed('b1', 'paneSwitch')) {
         const layout = st.screenLayout;
         if (layout === ScreenLayout.SPLIT_VIDEO_VIDEO) {
           // חצי-חצי חוזי: מעבירים שליטה בין 1 ל-2
@@ -289,16 +318,16 @@ export default function App() {
         }
       }
 
-      // --- B3: מחזור בין POV1→POV2→POV3 (POV4 לא נכלל) ---
-      if (justPressed('b3', 3)) {
+      // --- מחזור POV1→POV2→POV3 (POV4 לא נכלל): A10C=B3, Solaris=B16 ---
+      if (logicalJustPressed('b3', 'pov')) {
         const cur = st.viewMode;
         const i = POV_CYCLE.indexOf(cur);
         const next = POV_CYCLE[(i + 1) % POV_CYCLE.length]; // אם היינו ב-POV4, i=-1 → נעבור ל-POV1
         st.setViewMode(next);
       }
 
-      // --- B4: פותח את התפריט (סמן מתחיל על הפריסה הנוכחית); אם פתוח — בוחר וסוגר ---
-      if (justPressed('b4', 4)) {
+      // --- תפריט פריסה (פתיחה / בחירה+סגירה): A10C=B4, Solaris=B15 ---
+      if (logicalJustPressed('b4', 'layoutMenu')) {
         if (st.layoutMenuOpen) {
           st.setScreenLayout(LAYOUT_ORDER[st.layoutCursor]); // מחיל את מה שהסמן עומד עליו
           st.closeLayoutMenu();
@@ -309,19 +338,34 @@ export default function App() {
         }
       }
 
-      // --- B10/12/11/13: מזיזים רק את הסמן בתפריט (לא משנים את המסך) ---
+      // --- ניווט בתפריט (רשת 2x2: 0 1 / 2 3) — לא משנה את המסך, רק את הסמן ---
+      //   • A10C: כפתורים B11(ימינה)/B13(שמאלה)/B12(מטה)/B10(מעלה)
+      //   • Solaris: המיני-סטיק הימני (ציר 3 = ימין/שמאל, ציר 4 = מטה/מעלה), עם נעילת-קצה
       if (st.layoutMenuOpen) {
-        // התפריט מסודר כרשת 2x2:  0 1 / 2 3
-        //  B11 ימינה, B13 שמאלה, B12 למטה, B10 למעלה
         let c = st.layoutCursor;
         if (justPressed('b11', 11)) c = c % 2 === 0 ? c + 1 : c;        // ימינה בתוך השורה
         if (justPressed('b13', 13)) c = c % 2 === 1 ? c - 1 : c;        // שמאלה בתוך השורה
         if (justPressed('b12', 12)) c = c < 2 ? c + 2 : c;             // שורה למטה
         if (justPressed('b10', 10)) c = c >= 2 ? c - 2 : c;            // שורה למעלה
+
+        // Solaris: המרת המיני-סטיק לצעדים בדידים עם נעילת-קצה (מונע ריצת-סמן)
+        const solRight = (navigator.getGamepads?.() || []).find(p => p && isSolarisRightGrip(p)) || null;
+        const nav = menuNavDir(solRight);
+        if (nav.x !== 0 && prevAxis['navX'] === 0) {
+          if (nav.x > 0) c = c % 2 === 0 ? c + 1 : c;                  // ימינה
+          else           c = c % 2 === 1 ? c - 1 : c;                  // שמאלה
+        }
+        if (nav.y !== 0 && prevAxis['navY'] === 0) {
+          if (nav.y > 0) c = c < 2 ? c + 2 : c;                       // מטה (ציר 4 חיובי)
+          else           c = c >= 2 ? c - 2 : c;                       // מעלה
+        }
+        prevAxis['navX'] = nav.x; prevAxis['navY'] = nav.y;
+
         if (c !== st.layoutCursor) st.setLayoutCursor(c);
       } else {
         prev['b10'] = anyPressed(10); prev['b11'] = anyPressed(11);
         prev['b12'] = anyPressed(12); prev['b13'] = anyPressed(13);
+        prevAxis['navX'] = 0; prevAxis['navY'] = 0;
       }
       // ===== כפתורי השלט PS — פעילים רק כששלט PS מחובר וגם מצב הניהוג 'A' =====
       // B9=תפריט לייאאוט (פתיחה/בחירה+סגירה). כשהתפריט פתוח: משולש/עיגול/ריבוע/איקס = חצים.
