@@ -7,9 +7,9 @@
 // נשארת זהה לחלוטין בשני הסוגים — נהיגה במצב A, הצלב במצב B, והגימבל. לכן אין כאן
 // שום תרגום לצירים 0/1; הם נקראים ישירות בקומפוננטות כמו קודם.
 //
-// ה-Solaris נחשף כ-*שני התקנים* נפרדים (כמו ה-A10C):
-//   • גריף שמאל  = Vendor 044f / Product 042a
-//   • גריף ימין  = Vendor 044f / Product 0422
+// ה-Solaris נחשף כ-*שני התקנים* נפרדים (כמו ה-A10C). אומת חי מול ההתקן:
+//   • גריף שמאל  = Vendor 044f / Product 0422
+//   • גריף ימין  = Vendor 044f / Product 042a
 // שניהם מכילים "Solaris" ב-id, ולכן isSolaris() מזהה את שניהם.
 
 import { decodeHatAxis } from './wheelInput';
@@ -18,13 +18,13 @@ import { decodeHatAxis } from './wheelInput';
 export const isSolaris = (p: Gamepad | null): boolean =>
   !!p && /solaris/i.test(p.id);
 
-// זיהוי צד הגריף ב-Solaris לפי ה-product id
-export const isSolarisLeftGrip  = (p: Gamepad | null): boolean => !!p && /042a/i.test(p.id);
-export const isSolarisRightGrip = (p: Gamepad | null): boolean => !!p && /0422/i.test(p.id);
+// זיהוי צד הגריף ב-Solaris לפי ה-product id (אומת חי: 0422=שמאל, 042a=ימין)
+export const isSolarisLeftGrip  = (p: Gamepad | null): boolean => !!p && /0422/i.test(p.id);
+export const isSolarisRightGrip = (p: Gamepad | null): boolean => !!p && /042a/i.test(p.id);
 
 /**
  * מסדר את רשימת הסטיקים ל-[שמאל, ימין].
- * כש-Solaris מחובר — נועל את הצד לפי ה-product id (042a=שמאל, 0422=ימין),
+ * כש-Solaris מחובר — נועל את הצד לפי ה-product id (0422=שמאל, 042a=ימין),
  * ללא תלות בסדר החיבור של ה-USB (עמיד גם אם ה-OS יחליף את סדר האינדקסים).
  * בכל מקרה אחר (A10C וכו') — שומר על הסדר המקורי, כך שההתנהגות הקיימת לא משתנה.
  */

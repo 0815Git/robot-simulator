@@ -149,7 +149,8 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
 
       // Thrustmaster וכו': הדק-שמאל (B0/B5 של המכשיר השמאלי שאינו שלט ואינו הגה)
       const otherPads = allPads.filter(p => p && !/g920|logitech|racing wheel/i.test(p.id) && !psRe.test(p.id)) as Gamepad[];
-      const leftPad = otherPads[0] || null;
+      // נועלים את הגריף השמאלי לפי id (Solaris) ולא לפי סדר החיבור, שעלול להשתנות.
+      const leftPad = sortGrips(otherPads)[0] || null;
       // A10C: B0/B5 של הגריף השמאלי. Solaris: ההדק (B23). שניהם דרך padLaunch.
       const tmLaunch = padLaunch(leftPad);
 
