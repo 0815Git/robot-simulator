@@ -77,6 +77,9 @@ export interface SegmentRecord {
   pov4LastPosX: string;
   pov4LastPosY: string;
   pov4LastPosZ: string;
+  // --- פגיעות במבנים במקטע הזה ---
+  impactCount: number | string;
+  impactSum: number | string;
   pov4LastYaw: string;
   pov4LastPitch: string;
   pov4LastRoll: string;
@@ -252,6 +255,14 @@ interface TelemetryState {
   // הרחפן חלף מעל sensor-2 / sensor-5 (אופקית, בכל גובה) אחרי סיום ריצת הרובוט
   triggerDroneStart: () => void;
   triggerDroneEnd: () => void;
+  // ===== מדד פגיעות הרובוט =====
+  // לכל סשן: כמה התנגשויות היו במבנים (לא בגבעות ולא בקרקע), וסכום עוצמות
+  // הפגיעה — כל אחת נמדדת כמהירות הרובוט ברגע הפגיעה (מ'/ש').
+  impactStats: Record<number, { count: number; sum: number }>;
+  // צובר של המקטע הפתוח כרגע — מתאפס בכל סגירת מקטע.
+  _segImpactCount: number;
+  _segImpactSum: number;
+  recordImpact: (severity: number) => void;
   downloadCSV: () => void;
 }
 // ממיר את מצב שתי שכבות-העל לתווית של חלופת הסימון
@@ -592,11 +603,15 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       pov4DomYaw: domPov4[3], pov4DomPitch: domPov4[4], pov4DomRoll: domPov4[5],
       pov4LastPosX: String(lastPov4.posX), pov4LastPosY: String(lastPov4.posY), pov4LastPosZ: String(lastPov4.posZ),
       pov4LastYaw: String(lastPov4.yaw), pov4LastPitch: String(lastPov4.pitch), pov4LastRoll: String(lastPov4.roll),
+      impactCount: s._segImpactCount,
+      impactSum: s._segImpactSum,
     };
     set({
       segmentRecords: [...s.segmentRecords, record],
       _povDwell: {}, _povSince: now, _symDwell: {}, _symSince: now,
       _pov4Dwell: {}, _pov4Since: now,
+      // הצובר מתאפס יחד עם שאר מדדי המקטע, כדי שהמקטע הבא יתחיל נקי.
+      _segImpactCount: 0, _segImpactSum: 0,
     });
   },
 
@@ -611,7 +626,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   resetRequest: 0,
 
   setSubjectAndStart: (id, name) => {
-    set({ subjectId: id, subjectName: name, appPhase: 'training', menuOpen: false, sessionComplete: false, viewMode: ViewMode.POV2, pov4: { ...POV4_DEFAULT }, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false, targetDissolveAt: null });
+    set({ impactStats: {}, subjectId: id, subjectName: name, appPhase: 'training', menuOpen: false, sessionComplete: false, viewMode: ViewMode.POV2, pov4: { ...POV4_DEFAULT }, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false, targetDissolveAt: null });
     get().requestReset();
   },
 
@@ -627,7 +642,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
     // לפני שמתחילים סשן חדש — שומרים את המקטע שהיה פתוח בסשן הקודם (אם היה).
     get().flushOpenSegment();
     const t = Date.now();
-    set({ ...blankTimers, appPhase: 'session', currentSessionNumber: num, sessionComplete: false, menuOpen: false, viewMode: ViewMode.POV2, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false, targetDissolveAt: null, _povDwell: {}, _povSince: t, _symDwell: {}, _symSince: t });
+    set({ ...blankTimers, appPhase: 'session', currentSessionNumber: num, sessionComplete: false, menuOpen: false, viewMode: ViewMode.POV2, steerMode: 'A', screenLayout: ScreenLayout.FULL_VIDEO, videoSlot1: 'robot', videoSlot2: 'drone', activePane: 1, droneView: false, droneLaunched: false, targetDissolveAt: null, _povDwell: {}, _povSince: t, _symDwell: {}, _symSince: t, _segImpactCount: 0, _segImpactSum: 0 });
     get().requestReset();
   },
 
@@ -664,6 +679,8 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       steerMode: '' as any,
       time: ((now - (s.expStart as number)) / 1000).toFixed(2),
       flips: '',
+      impactCount: (get().impactStats[s.currentSessionNumber ?? 0]?.count) ?? 0,
+      impactSum: (get().impactStats[s.currentSessionNumber ?? 0]?.sum) ?? 0,
       pov4DomPosX: '', pov4DomPosY: '', pov4DomPosZ: '',
       pov4DomYaw: '', pov4DomPitch: '', pov4DomRoll: '',
       pov4LastPosX: '', pov4LastPosY: '', pov4LastPosZ: '',
@@ -885,6 +902,9 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
         steerMode: '' as any,
         time: ((now - (start as number)) / 1000).toFixed(2),
         flips: '',
+        // סכום כל המקטעים בסשן — נלקח מהצובר של הסשן, לא מהמקטע האחרון.
+        impactCount: (s.impactStats[s.currentSessionNumber ?? 0]?.count) ?? 0,
+        impactSum: (s.impactStats[s.currentSessionNumber ?? 0]?.sum) ?? 0,
         pov4DomPosX: '', pov4DomPosY: '', pov4DomPosZ: '',
         pov4DomYaw: '', pov4DomPitch: '', pov4DomRoll: '',
         pov4LastPosX: '', pov4LastPosY: '', pov4LastPosZ: '',
@@ -940,6 +960,22 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   },
 
   // מוריד קובץ CSV עם כל השורות שנצברו (שורה לכל סשן).
+  impactStats: {},
+  _segImpactCount: 0,
+  _segImpactSum: 0,
+  // נקרא מ-Robot.tsx פעם אחת לכל התנגשות, עם עוצמת הפגיעה שנמדדה.
+  // נצבר פעמיים: למקטע הפתוח (לשורת המקטע) ולסשן כולו (לשורת הסך הכל).
+  recordImpact: (severity) => {
+    const s = get();
+    const n = s.currentSessionNumber;
+    if (n == null) return;                       // מחוץ לסשן (אימון) — לא נמדד
+    const cur = s.impactStats[n] || { count: 0, sum: 0 };
+    set({
+      impactStats: { ...s.impactStats, [n]: { count: cur.count + 1, sum: cur.sum + severity } },
+      _segImpactCount: s._segImpactCount + 1,
+      _segImpactSum: s._segImpactSum + severity,
+    });
+  },
   downloadCSV: () => {
     // סוגרים ורושמים מקטע פתוח כרגע (אם יש), כדי שגם ניסוי שלא הגיע לשטיח האחרון יירד לקובץ.
     get().flushOpenSegment();
@@ -963,6 +999,9 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       "POV4 שולט - Yaw", "POV4 שולט - Pitch", "POV4 שולט - Roll",
       "POV4 אחרון - X", "POV4 אחרון - Y", "POV4 אחרון - Z",
       "POV4 אחרון - Yaw", "POV4 אחרון - Pitch", "POV4 אחרון - Roll",
+      "התנגשויות במבנים (מספר)",
+      "עוצמת פגיעה מצטברת (מ'/ש')",
+      "עוצמת פגיעה ממוצעת (מ'/ש')",
     ];
 
     const rows = s.segmentRecords.map(r => [
@@ -972,6 +1011,12 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       r.pov4DomYaw, r.pov4DomPitch, r.pov4DomRoll,
       r.pov4LastPosX, r.pov4LastPosY, r.pov4LastPosZ,
       r.pov4LastYaw, r.pov4LastPitch, r.pov4LastRoll,
+      // פגיעות: לכל מקטע הערכים שלו; בשורת "סך הכל" — הסכום של כל המקטעים.
+      ...(() => {
+        const c = Number(r.impactCount) || 0;
+        const sum = Number(r.impactSum) || 0;
+        return [c, +sum.toFixed(2), c > 0 ? +(sum / c).toFixed(2) : 0];
+      })(),
     ]);
 
     const esc = (v: any) => {

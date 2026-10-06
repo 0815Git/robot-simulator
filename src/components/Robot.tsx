@@ -49,6 +49,15 @@ const _drvImpulse = new THREE.Vector3();
 // הוזז ל-z=3.5 בעקבות מתיחת גבעה 1. כך הרובוט מתחיל לפני השטיח וחוצה אותו בנסיעה.
 const SPAWN = { x: 0, y: 1.5, z: 7 };
 
+// ===== מדד פגיעת הרובוט =====
+// מגע רציף נחשב התנגשות אחת. אחרי IMPACT_GAP_MS בלי עדכון המגע נסגר ונרשם.
+const IMPACT_GAP_MS = 400;
+// עוצמת הפגיעה נמדדת כמהירות הרובוט ברגע תחילת המגע (מ'/ש'), ולא לפי
+// totalForceMagnitude של Rapier: הכוח שם נשלט ע"י *הדחיפה המתמשכת* אל הקיר
+// ולא ע"י המכה עצמה, ולכן נמדד גבוה יותר בהתנגשות איטית מאשר במהירה.
+// מתחת לסף הזה מדובר בהישענות או בגירוד קל ולא בפגיעה.
+const IMPACT_MIN_SPEED = 0.35;
+
 // ===== קבועי ניהוג ב' (מעקב אחרי הצלב העגול) =====
 // כל הזוויות ברדיאנים. כל הקצבים הם "ליחידת זמן", לא "לפריים".
 const CAM_PAN_RATE   = 1.2;   // rad/s - פאן מצלמה במצב א' (כפתורים 11/13)
@@ -83,6 +92,13 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
   const lastResetRef = useRef(0);
   const prevEKeyRef = useRef(false);
   const prevLinkBtnRef = useRef(false);
+  // ===== מדד פגיעה: מגעים פתוחים עם מבנים =====
+  // מפתח = handle של הגוף שנפגע, ערך = חותמת הזמן של המגע האחרון איתו.
+  // ההתנגשות נרשמת מיד כשהמגע *נפתח*, והמפה משמשת רק כדי לא לספור את אותו
+  // מגע שוב ושוב: בלעדיה גרירה לאורך קיר הייתה נספרת כהתנגשות בכל פריים.
+  const openImpacts = useRef<Map<number, number>>(new Map());
+  // מהירות הרובוט בפריים הקודם — זו המהירות שבה הוא *הגיע* אל המכשול.
+  const prevSpeedRef = useRef(0);
   const prevDissolveKeyRef = useRef(false);
   // ריכוך הסיבוב העדין — מחושב ב-useFrame, נצרך בצעד הפיזיקה.
   const fineTurnDampRef = useRef(1.0);
@@ -106,6 +122,20 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
 
   useFrame((state, delta) => {
     if (!bodyRef.current) return;
+
+    // ניקוי מגעים שהסתיימו — כך פגיעה חוזרת באותו מבנה תיספר כהתנגשות חדשה.
+    if (openImpacts.current.size > 0) {
+      const now = performance.now();
+      for (const [handle, last] of openImpacts.current) {
+        if (now - last >= IMPACT_GAP_MS) openImpacts.current.delete(handle);
+      }
+    }
+
+    // מהירות אופקית לפריים הבא — נקראת ברגע שנפתח מגע חדש.
+    {
+      const lv = bodyRef.current.linvel();
+      prevSpeedRef.current = Math.hypot(lv.x, lv.z);
+    }
 
     // --- איפוס מיקום הרובוט בעת מעבר בין שלבי הניסוי ---
     const resetReq = useTelemetryStore.getState().resetRequest;
@@ -637,6 +667,24 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       ref={bodyRef}
       type="dynamic"
       colliders={false}
+      // ===== מדידת פגיעות במבנים =====
+      // כל מגע עם גוף שאינו מסומן impactIgnore (גבעות, קרקע, רצפת המבנה, גבולות
+      // המפה) נאסף לפי הגוף שנפגע; שומרים את עוצמת השיא, והרישום עצמו נעשה
+      // בסגירת המגע ב-useFrame.
+      onContactForce={(e) => {
+        if ((e.other.rigidBodyObject?.userData as any)?.impactIgnore) return;
+        const handle = e.other.rigidBody?.handle;
+        if (handle == null) return;
+        const now = performance.now();
+        const isNew = !openImpacts.current.has(handle);
+        openImpacts.current.set(handle, now);
+        // רושמים מיד בתחילת המגע: עוצמת הפגיעה היא המהירות שאיתה הגענו, והיא
+        // ידועה כבר עכשיו. רישום בסוף המגע היה "נתקע" כל עוד הרובוט נשען על
+        // הקיר, וההתנגשות הייתה נרשמת באיחור — או נבלעת בסוף הסשן.
+        if (isNew && prevSpeedRef.current >= IMPACT_MIN_SPEED) {
+          useTelemetryStore.getState().recordImpact(prevSpeedRef.current);
+        }
+      }}
       position={[SPAWN.x, 1, SPAWN.z]}
       enabledRotations={[true, true, true]}
       mass={28}

@@ -334,9 +334,19 @@ export function World({ visualsOnly = false, practice = false, showHillOverlay =
 
     const elements = [];
 
+    // ===== סיווג לצורך מדד הפגיעה =====
+    // הגבעות ורצפת המבנה הם *מסלול* — הרובוט אמור לנסוע עליהם, ולכן מגע בהם
+    // אינו "התנגשות". כל השאר שעובר דרך wrap (קירות המבנה, המחיצה הפנימית)
+    // נספר כפגיעה. ההחרגה מסומנת ב-userData ונקראת ב-Robot.tsx.
+    const DRIVABLE = /^(complex-hill|bldg-floor)/;
     const wrap = (key: string, pos: [number, number, number], children: any, type: any = "fixed", colliders: any = "trimesh", rot: [number, number, number] = [0, 0, 0]) => {
       if (visualsOnly) return <group key={key} position={pos} rotation={rot}>{children}</group>;
-      return <RigidBody key={key} type={type} colliders={colliders} position={pos} rotation={rot}>{children}</RigidBody>;
+      return (
+        <RigidBody key={key} type={type} colliders={colliders} position={pos} rotation={rot}
+          userData={{ impactIgnore: DRIVABLE.test(key) }}>
+          {children}
+        </RigidBody>
+      );
     };
 
     const hillMaterial = (
@@ -1004,11 +1014,12 @@ export function World({ visualsOnly = false, practice = false, showHillOverlay =
         </>
       ) : (
         <>
-          <RigidBody type="fixed" friction={1}>{ground}</RigidBody>
-          <RigidBody type="fixed" position={[0, 2.5, -250]}><mesh visible={false}><boxGeometry args={[500, 5, 2]} /></mesh></RigidBody>
-          <RigidBody type="fixed" position={[0, 2.5, 250]}><mesh visible={false}><boxGeometry args={[500, 5, 2]} /></mesh></RigidBody>
-          <RigidBody type="fixed" position={[250, 2.5, 0]}><mesh visible={false}><boxGeometry args={[2, 5, 500]} /></mesh></RigidBody>
-          <RigidBody type="fixed" position={[-250, 2.5, 0]}><mesh visible={false}><boxGeometry args={[2, 5, 500]} /></mesh></RigidBody>
+          {/* קרקע וגבולות המפה — משטח נסיעה וגדר חיצונית, לא "התנגשות במבנה" */}
+          <RigidBody type="fixed" friction={1} userData={{ impactIgnore: true }}>{ground}</RigidBody>
+          <RigidBody type="fixed" position={[0, 2.5, -250]} userData={{ impactIgnore: true }}><mesh visible={false}><boxGeometry args={[500, 5, 2]} /></mesh></RigidBody>
+          <RigidBody type="fixed" position={[0, 2.5, 250]} userData={{ impactIgnore: true }}><mesh visible={false}><boxGeometry args={[500, 5, 2]} /></mesh></RigidBody>
+          <RigidBody type="fixed" position={[250, 2.5, 0]} userData={{ impactIgnore: true }}><mesh visible={false}><boxGeometry args={[2, 5, 500]} /></mesh></RigidBody>
+          <RigidBody type="fixed" position={[-250, 2.5, 0]} userData={{ impactIgnore: true }}><mesh visible={false}><boxGeometry args={[2, 5, 500]} /></mesh></RigidBody>
           {boundaries}
         </>
       )}
