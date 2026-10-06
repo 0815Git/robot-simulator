@@ -120,8 +120,11 @@ export function MapLabels() {
           return { x: d[0], y: 5, z: d[2] };
         }}
         getRot={() => {
-          // כיוון גוף הרחפן (רדיאנים), נשמר ב-store כל פריים.
-          return useTelemetryStore.getState().droneYaw;
+          // כיוון *המבט* של הרחפן (רדיאנים) = כיוון הגוף + סבסוב הגימבל.
+          // בריחוף ידני הגימבל אפס ולכן זה פשוט כיוון הגוף; בצימוד המצלמה
+          // עצמאית, ואז החץ מראה לאן היא מסתכלת ולא לאן הגוף פונה.
+          const st = useTelemetryStore.getState();
+          return st.droneYaw + st.droneGimbalYaw * (Math.PI / 180);
         }}
       />
 

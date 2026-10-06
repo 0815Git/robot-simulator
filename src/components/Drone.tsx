@@ -64,6 +64,11 @@ function springStep(x: number, target: number, v: number, dt: number, k: number,
 const DRONE_AIM_IDLE_DELAY = 2.5; // שניות בלי נגיעה/הדק עד שהעיגול מתחיל לחזור למרכז
 const DRONE_AIM_IDLE_TAU   = 0.35; // שניות — כמה מהר הוא חוזר
 // ביציאה מצימוד — המצלמה מתיישרת בהדרגה לאופק (זווית המנוחה של ההטסה הידנית).
+// קבוע-הזמן של התיישרות אף הרחפן לאופק אחרי שחרור הסטיקים (שניות).
+// גדול יותר = התיישרות איטית ורכה יותר.
+const NOSE_LEVEL_TAU = 0.6;
+// תקרת הטיית אף הרחפן מעלה/מטה (רדיאנים) — חלה גם על פקדי האף וגם על כיוון המבט.
+const NOSE_MAX_ANGLE = Math.PI / 4;   // ±45°
 const DRONE_LEVEL_GIMBAL_PITCH = 18; // הזווית שבה המצלמה על האופק (כמו במצב ידני רגיל)
 const GIMBAL_LEVEL_RATE = 3;         // כמה מהר מתיישרת לאופק ביציאה מצימוד (גבוה = מהיר יותר)
 // מזהה שלט PlayStation (DualSense/DualShock). רק כשהוא מחובר — מיפוי הרחפן-שלט פעיל.
@@ -124,7 +129,13 @@ export function DroneControls() {
   const aimIdleTime = useRef(0);                                       // כמה זמן העיגול "בטל" (לחזרה למרכז)
   const followHeightVel = useRef(0);                                   // מהירות קפיץ לגובה הרחפן בצימוד
   const prevDroneManual = useRef(true);                                // מצב הצימוד בפריים הקודם (לזיהוי יציאה מצימוד)
-  const levelingGimbal = useRef(false);                                // האם המצלמה כרגע מתיישרת לאופק לאחר יציאה מצימוד
+  const levelingGimbal = useRef(false);
+  // האם הרחפן כבר טס מאז שנקבעה זווית האף. רק אחרי טיסה בפועל השחרור מתיישר
+  // לאופק — אחרת האף היה קופץ חזרה כבר ברגע שמשחררים את B5/B7, לפני שיצאנו לדרך.
+  const noseLevelArmed = useRef(false);
+  // דלתות כיוון-המבט של הפריים הנוכחי (רדיאנים), כשהן מסובבות את גוף הרחפן.
+  const aimBodyYaw = useRef(0);
+  const aimBodyPitch = useRef(0);                                // האם המצלמה כרגע מתיישרת לאופק לאחר יציאה מצימוד
 
   useFrame((_, delta) => {
     const s = useTelemetryStore.getState();
@@ -195,11 +206,23 @@ export function DroneControls() {
         const gpL = sticks[0] || null;
         const lx = gpL?.axes?.[0] ?? 0, ly = gpL?.axes?.[1] ?? 0;
         const DZ = 0.12, YR = 70, PR = 55;
-        let yaw = s.droneGimbalYaw, pitch = s.droneGimbalPitch;
-        if (Math.abs(lx) > DZ) yaw   -= lx * YR * delta;
+        let dYawDeg = 0, dPitchDeg = 0;
+        if (Math.abs(lx) > DZ) dYawDeg   -= lx * YR * delta;
         // דחיפה = הורדת הזווית, משיכה = הרמת הזווית — תואם לכיוון הזזת הצלב המעוגל.
-        if (Math.abs(ly) > DZ) pitch += ly * PR * delta;
-        if (yaw !== s.droneGimbalYaw || pitch !== s.droneGimbalPitch) s.setDroneGimbal(yaw, pitch);
+        if (Math.abs(ly) > DZ) dPitchDeg += ly * PR * delta;
+
+        if (s.droneManual) {
+          // ריחוף ידני: המצלמה מקובעת לאף, ולכן מסובבים את גוף הרחפן במקום —
+          // גם כשעומדים על חוזי הרובוט ומנהגים אותו במקביל.
+          if (dYawDeg !== 0) s.setDroneYaw(s.droneYaw + dYawDeg * DEG2RAD);
+          if (dPitchDeg !== 0) {
+            const np = s.droneBodyPitch + dPitchDeg * DEG2RAD;
+            s.setDroneBodyPitch(Math.max(-NOSE_MAX_ANGLE, Math.min(NOSE_MAX_ANGLE, np)));
+          }
+        } else if (dYawDeg !== 0 || dPitchDeg !== 0) {
+          // צימוד: הגוף עסוק במעקב אחרי הרובוט, ולכן המצלמה נשארת עצמאית.
+          s.setDroneGimbal(s.droneGimbalYaw + dYawDeg, s.droneGimbalPitch + dPitchDeg);
+        }
 
         // גובה הרחפן — פעיל גם בצימוד וגם בלעדיו.
         //   • A10C: ה-HAT (ציר 9) משני הג'ויסטיקים.
@@ -296,34 +319,53 @@ export function DroneControls() {
       droneFlying = triggerHeld || diffDriveHeld || vertStrafeHeld || kbFly;
     }
 
-    // ===== גימבל =====
-    let yaw = s.droneGimbalYaw, pitch = s.droneGimbalPitch;
-    if (k['ArrowLeft']) yaw += YAW_RATE * delta;
-    if (k['ArrowRight']) yaw -= YAW_RATE * delta;
-    if (k['ArrowUp']) pitch += PITCH_RATE * delta;
-    if (k['ArrowDown']) pitch -= PITCH_RATE * delta;
-    // סטיק שמאל שולט בזווית מצלמת הרחפן:
+    // ===== כיוון המבט =====
+    // כל פקדי "כוון את המבט" נאספים כאן לכדי שתי דלתות (במעלות), ורק אחר כך
+    // מוחלט לאן הן הולכות:
+    //   • ריחוף ידני — הן מסובבות את *גוף* הרחפן במקום. המצלמה מקובעת לאף,
+    //     ולכן הרחפן תמיד טס לאן שמסתכלים. המיקום (x/y/z) לא משתנה מהסיבוב.
+    //   • צימוד — הן מזיזות את הגימבל כמקודם, כי שם הגוף עסוק במעקב אחרי הרובוט
+    //     והמצלמה חייבת להיות עצמאית כדי להמשיך למסגר אותו.
+    // זווית המנוחה של הגימבל נשמרת כפי שהיא — הוא לא מתאפס, רק מפסיק לקבל קלט.
+    let aimYawDeg = 0, aimPitchDeg = 0;
+    if (k['ArrowLeft']) aimYawDeg += YAW_RATE * delta;
+    if (k['ArrowRight']) aimYawDeg -= YAW_RATE * delta;
+    if (k['ArrowUp']) aimPitchDeg += PITCH_RATE * delta;
+    if (k['ArrowDown']) aimPitchDeg -= PITCH_RATE * delta;
+
+    // סטיק שמאל מכוון את המבט:
     //   • במצב מעקב (צימוד) — תמיד.
-    //   • בריחוף ידני (ג'ויסטיקים, מצב ב') — רק כשהרחפן עומד במקום ואינו מוטס
-    //     (כל עוד ג'ויסטיק ימין מטיס אותו, זווית המצלמה לא זזה).
+    //   • בריחוף ידני (ג'ויסטיקים, מצב ב') — רק כשהרחפן עומד במקום ואינו מוטס.
     const leftStickAimsCam = !s.droneManual || (s.steerMode === 'B' && isTm && !droneFlying);
     if (leftStickAimsCam) {
       const lx = gpLeft?.axes?.[0] ?? 0, ly = gpLeft?.axes?.[1] ?? 0;
-      if (Math.abs(lx) > STICK_DEADZONE) yaw   -= lx * STICK_CAM_YAW_RATE * delta;
+      if (Math.abs(lx) > STICK_DEADZONE) aimYawDeg   -= lx * STICK_CAM_YAW_RATE * delta;
       // דחיפה = הורדת הזווית, משיכה = הרמת הזווית — תואם לכיוון הזזת הצלב המעוגל.
-      if (Math.abs(ly) > STICK_DEADZONE) pitch += ly * STICK_CAM_PITCH_RATE * delta;
+      if (Math.abs(ly) > STICK_DEADZONE) aimPitchDeg += ly * STICK_CAM_PITCH_RATE * delta;
     }
 
-    // ===== שלט PS במצב א': B6 מוחזק → 4 החצים (B12-B15) מזיזים *רק* את זווית המצלמה =====
-    // כל עוד B6 לחוץ, החצים מאבדים את תפקידם הרגיל (גובה/הסטה הצידה/המראה) ומשמשים
-    // כפאן/טילט של מצלמת המטען. התפקידים הרגילים חוזרים ברגע שמשחררים את B6.
+    // ===== שלט PS במצב א': B6 מוחזק → 4 החצים (B12-B15) מכוונים את המבט =====
+    // כל עוד B6 לחוץ, החצים מאבדים את תפקידם הרגיל (גובה/הסטה הצידה/המראה).
     const psCamMod = PS_CAM_MOD_HELD(psPad, s.steerMode);
     if (psCamMod) {
       const pb = psPad!.buttons;
-      if (pb?.[12]?.pressed) pitch += PITCH_RATE * delta;   // חץ עליון — המצלמה מתרוממת
-      if (pb?.[13]?.pressed) pitch -= PITCH_RATE * delta;   // חץ תחתון — המצלמה יורדת
-      if (pb?.[14]?.pressed) yaw   += YAW_RATE * delta;     // חץ שמאלה
-      if (pb?.[15]?.pressed) yaw   -= YAW_RATE * delta;     // חץ ימינה
+      if (pb?.[12]?.pressed) aimPitchDeg += PITCH_RATE * delta;   // חץ עליון
+      if (pb?.[13]?.pressed) aimPitchDeg -= PITCH_RATE * delta;   // חץ תחתון
+      if (pb?.[14]?.pressed) aimYawDeg   += YAW_RATE * delta;     // חץ שמאלה
+      if (pb?.[15]?.pressed) aimYawDeg   -= YAW_RATE * delta;     // חץ ימינה
+    }
+
+    // בריחוף ידני הדלתות שייכות לגוף — נצרכות בבלוק הטיסה למטה. בצימוד הן
+    // נשארות 0 כאן וממשיכות אל הגימבל.
+    let yaw = s.droneGimbalYaw, pitch = s.droneGimbalPitch;
+    if (s.droneManual) {
+      aimBodyYaw.current = aimYawDeg * DEG2RAD;
+      aimBodyPitch.current = aimPitchDeg * DEG2RAD;
+    } else {
+      aimBodyYaw.current = 0;
+      aimBodyPitch.current = 0;
+      yaw += aimYawDeg;
+      pitch += aimPitchDeg;
     }
 
     // לאחר יציאה מצימוד — המצלמה מתיישרת בהדרגה לאופק, אלא אם המשתמש מכוון אותה בעצמו.
@@ -382,6 +424,17 @@ export function DroneControls() {
       let bodyPitch = s.droneBodyPitch;   // הטיית האף מעלה/מטה (מתכנסת אל העיגול בזמן הדק)
       const step = FLY_SPEED * delta;
 
+      // ===== כיוון המבט מסובב את הגוף =====
+      // המצלמה מקובעת לאף, ולכן פקדי המבט מסובבים את הרחפן עצמו — יאו והטיית אף —
+      // בלי לגעת במיקום. מכאן והלאה כל נתיבי הטיסה משתמשים בזווית המעודכנת,
+      // ולכן הרחפן טס בדיוק לאן שמסתכלים.
+      if (aimBodyYaw.current !== 0 || aimBodyPitch.current !== 0) {
+        bodyYaw += aimBodyYaw.current;
+        bodyPitch = Math.max(-NOSE_MAX_ANGLE, Math.min(NOSE_MAX_ANGLE, bodyPitch + aimBodyPitch.current));
+        if (bodyYaw !== s.droneYaw) s.setDroneYaw(bodyYaw);
+        if (bodyPitch !== s.droneBodyPitch) s.setDroneBodyPitch(bodyPitch);
+      }
+
       // ===== הגה G920 (מצב ג'): גז/ברקס/הגה = נהיגה, AXIS 9 = גובה + הליכה סרטנית, B4/B5 = אף =====
       const wheelPadF = allPads.find(isWheelPad) || null;
       if (wheelPadF && s.steerMode === 'C') {
@@ -390,7 +443,6 @@ export function DroneControls() {
 
         // B4 = הרמת האף, B5 = הורדת האף. הזווית נשמרת עד שמחזירים אותה ידנית.
         const wb = wheelPadF.buttons;
-        const NOSE_MAX_ANGLE = Math.PI / 4;   // ±45°
         const NOSE_RATE = 1.2;                // rad/s
         if (wb?.[4]?.pressed) bodyPitch += NOSE_RATE * delta;
         if (wb?.[5]?.pressed) bodyPitch -= NOSE_RATE * delta;
@@ -452,15 +504,41 @@ export function DroneControls() {
 
         const fX = -Math.sin(bodyYaw), fZ = -Math.cos(bodyYaw);
         const rX =  Math.cos(bodyYaw), rZ = -Math.sin(bodyYaw);
-        nx += fX * drive * step; nz += fZ * drive * step;
 
-        // B5 = הרמת אף הרחפן, B7 = הורדת האף. הזווית נשמרת עד שמחזירים אותה ידנית.
-        const NOSE_MAX_ANGLE = Math.PI / 4;   // ±45°
+        // ===== זווית האף =====
+        // B5 = הרמת האף, B7 = הורדת האף. מחושב *לפני* התנועה, כדי שהטיסה בפריים
+        // הזה כבר תהיה בכיוון האף החדש.
         const NOSE_RATE = 1.2;                // rad/s
+        // גם פקד מבט (B6+חצים / חצי מקלדת) נחשב כוונון ידני של האף, אחרת
+        // ההתיישרות האוטומטית הייתה נלחמת בכיוון שהמשתמשת מכוונת עכשיו.
+        const noseHeld = (pbt?.[5]?.pressed || pbt?.[7]?.pressed || aimBodyPitch.current !== 0) || false;
         if (pbt?.[5]?.pressed) bodyPitch += NOSE_RATE * delta;
         if (pbt?.[7]?.pressed) bodyPitch -= NOSE_RATE * delta;
+
+        // ===== מתי האף מתיישר לאופק =====
+        // רק אחרי שבאמת טסנו ואז עצרנו. כוונון האף לפני היציאה לדרך נשמר כמו
+        // שהוא, וגם כוונון מחדש באמצע ריחוף מבטל את ההתיישרות עד הטיסה הבאה.
+        const sticksIdle = leftSide === 0 && rightSide === 0;
+        if (noseHeld) {
+          noseLevelArmed.current = false;        // כוונון ידני — מחזיקים את הזווית
+        } else if (!sticksIdle) {
+          noseLevelArmed.current = true;         // יצאנו לדרך — בעצירה נתיישר
+        } else if (noseLevelArmed.current && Math.abs(bodyPitch) > 1e-4) {
+          // דעיכה מעריכית ולא קפיץ: יציבה בכל קצב פריימים. קפיץ מרוסן מתפוצץ
+          // כש-delta גדול (חלון ברקע, נפילת פריימים) והאף מתהפך בין הקצוות.
+          bodyPitch -= bodyPitch * (1 - Math.exp(-delta / NOSE_LEVEL_TAU));
+          if (Math.abs(bodyPitch) < 1e-3) { bodyPitch = 0; noseLevelArmed.current = false; }
+        }
+
         bodyPitch = Math.max(-NOSE_MAX_ANGLE, Math.min(NOSE_MAX_ANGLE, bodyPitch));
         if (bodyPitch !== s.droneBodyPitch) s.setDroneBodyPitch(bodyPitch);
+
+        // ===== תנועה בכיוון האף התלת-ממדי =====
+        // אף מורם/מורד אינו רק ויזואלי: הוא מטה את וקטור הטיסה. אף מטה → הרחפן
+        // יורד תוך כדי התקדמות, אף מעלה → מטפס. זהה לנתיב ההדק ולנתיב ההגה.
+        const horiz = drive * Math.cos(bodyPitch);
+        nx += fX * horiz * step; nz += fZ * horiz * step;
+        ny += Math.sin(bodyPitch) * drive * step;
 
         // חצים: מעלה/מטה = גובה, ימין/שמאל = הסטה הצידה.
         // כש-B6 מוחזק הם שייכים לזווית המצלמה (למעלה), ולכן אינם מזיזים את הרחפן.

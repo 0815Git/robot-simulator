@@ -360,7 +360,14 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
     } else {
       // ----- ניתוק צימוד (חזרה לריחוף ידני) -----
       // הרחפן נשאר בדיוק איפה שהוא ובאיזו זווית שהוא — לא חוזר לשום מצב ישן.
-      set({ droneManual: true });
+      // בריחוף ידני המצלמה מקובעת לאף, ולכן "מקפלים" את סבסוב הגימבל לתוך כיוון
+      // הגוף ומאפסים אותו: הגוף פונה בדיוק לאן שהמצלמה הביטה, והתמונה לא קופצת.
+      // ה-pitch לא מקופל — הוא מתיישר לאופק בהדרגה (levelingGimbal ב-Drone.tsx).
+      set({
+        droneManual: true,
+        droneYaw: s.droneYaw + s.droneGimbalYaw * (Math.PI / 180),
+        droneGimbalYaw: 0,
+      });
     }
   },
   setDronePosition: (p) => set({ dronePosition: p }),
