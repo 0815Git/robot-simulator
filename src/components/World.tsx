@@ -1,6 +1,6 @@
 // File: src/components/World.tsx
 import { Sky, Environment, useTexture, useGLTF, Clone, Html } from '@react-three/drei';
-import { DesertVillage } from './Village';
+import { DesertVillage, VillageHouse } from './Village';
 import { RigidBody, CuboidCollider } from '@react-three/rapier';
 import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
@@ -255,79 +255,28 @@ export function World({ visualsOnly = false, practice = false, showHillOverlay =
   const triggerSensor4 = useTelemetryStore(s => s.triggerSensor4);
   const triggerSensor5 = useTelemetryStore(s => s.triggerSensor5);
   const obstacles = useMemo(() => {
-    // ===== מסך אימון: מסלול סללום קונוסים מוצקים עם סימון מסלול =====
+    // ===== מסך אימון: מבנים מפוזרים בלבד, לתרגול חופשי של נהיגה =====
     if (practice) {
       const elements: any[] = [];
 
-      // קונוס בודד: חרוט כתום + פס לבן + בסיס שחור. מוצק - הרובוט מתנגש בו.
-      const cone = (key: string, x: number, z: number) => {
-        const visual = (
-          <>
-            <mesh castShadow position={[0, 0.4, 0]}>
-              <coneGeometry args={[0.32, 0.8, 20]} />
-              <meshStandardMaterial color="#ff6a00" roughness={0.5} metalness={0.1} />
-            </mesh>
-            <mesh position={[0, 0.45, 0]}>
-              <cylinderGeometry args={[0.25, 0.28, 0.1, 20]} />
-              <meshStandardMaterial color="#ffffff" roughness={0.6} />
-            </mesh>
-            <mesh receiveShadow position={[0, 0.02, 0]}>
-              <boxGeometry args={[0.6, 0.04, 0.6]} />
-              <meshStandardMaterial color="#1a1a1a" />
-            </mesh>
-          </>
-        );
-
-        if (visualsOnly) {
-          return <group key={key} position={[x, 0, z]}>{visual}</group>;
-        }
-        return (
-          <RigidBody key={key} type="fixed" colliders={false} position={[x, 0, z]}>
-            {visual}
-            <CuboidCollider args={[0.3, 0.4, 0.3]} position={[0, 0.4, 0]} />
-          </RigidBody>
-        );
-      };
-
-      // סללום אמיתי: טור שמאלי (x=-1.6) וטור ימני (x=1.6) לסירוגין.
-      // הרובוט (רוחב ~0.9) חייב להתפתל ביניהם. z יורד = קדימה.
-      const conePositions: [number, number][] = [
-        [-0.7, 1], [0.7, -3], [-0.7, -7], [0.7, -11], [-0.7, -15], [0.7, -19],
+      // ===== מבנים =====
+      // במקום קונוסים — מעט מבנים מפוזרים, זהים לאלה שבסשנים האמיתיים (אותו
+      // houseGroup של הכפר). המטרה היא שהמתאמן יתרגל נהיגה ליד מבנים אמיתיים,
+      // ולא מול חרוטים; הם גם מוצקים, ולכן נספרים במדד הפגיעות בדיוק כמו בכפר.
+      // ארבעה לסירוגין משני צדי ציר הנסיעה, ועוד שניים רחוקים יותר לנפח ולעומק.
+      // אין שביל, אין טבעות ואין מסלול מסומן — תרגול חופשי בשטח פתוח.
+      const practiceHouses: { x: number; z: number; w: number; d: number; h: number; rot: number }[] = [
+        { x: -4.5, z: -1,  w: 3.8, d: 3.4, h: 3.2, rot: 0.15 },
+        { x:  4.5, z: -7,  w: 3.4, d: 3.8, h: 3.6, rot: -0.2 },
+        { x: -4.5, z: -13, w: 4.0, d: 3.2, h: 2.9, rot: 0.08 },
+        { x:  4.5, z: -19, w: 3.2, d: 3.6, h: 3.4, rot: -0.12 },
+        { x: -9.5, z: -9,  w: 4.2, d: 3.6, h: 5.2, rot: 0.5 },
+        { x:  9.5, z: -16, w: 3.6, d: 4.0, h: 3.0, rot: -0.4 },
       ];
-      conePositions.forEach(([x, z], i) => elements.push(cone(`practice-cone-${i}`, x, z)));
-
-      // נקודות המסלול: עוברות בצד הנגדי של כל קונוס כדי לאלץ פנייה.
-      // קונוס בשמאל => המסלול עובר ימינה ממנו, ולהיפך.
-      const waypoints = [
-        [0, 5], [0.9, 1], [-0.9, -3], [0.9, -7], [-0.9, -11], [0.9, -15], [-0.9, -19], [0, -23],
-      ].map(([x, z]) => new THREE.Vector3(x, 0.03, z));
-
-      // שובל נקודות תכלת מעוקל לאורך המסלול המתפתל
-      const curve = new THREE.CatmullRomCurve3(waypoints);
-      const dots = curve.getPoints(120);
-      for (let i = 0; i < dots.length; i += 2) {
-        const p = dots[i];
-        elements.push(
-          <mesh key={`practice-dot-${i}`} position={[p.x, 0.03, p.z]} rotation={[-Math.PI / 2, 0, 0]}>
-            <circleGeometry args={[0.1, 16]} />
-            <meshBasicMaterial color="#02c5cf" transparent opacity={0.9} side={THREE.DoubleSide} depthWrite={false} />
-          </mesh>
-        );
-      }
-
-      // טבעת התחלה ירוקה וטבעת סיום כתומה
-      elements.push(
-        <mesh key="practice-start" position={[0, 0.03, 5]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.5, 0.65, 32]} />
-          <meshBasicMaterial color="#22c55e" transparent opacity={0.85} side={THREE.DoubleSide} depthWrite={false} />
-        </mesh>
-      );
-      elements.push(
-        <mesh key="practice-finish" position={[0, 0.03, -25]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.5, 0.65, 32]} />
-          <meshBasicMaterial color="#ff6a00" transparent opacity={0.85} side={THREE.DoubleSide} depthWrite={false} />
-        </mesh>
-      );
+      practiceHouses.forEach((hs, i) => elements.push(
+        <VillageHouse key={`practice-house-${i}`} seed={i + 1} visualsOnly={visualsOnly}
+          x={hs.x} z={hs.z} w={hs.w} d={hs.d} h={hs.h} rot={hs.rot} />
+      ));
 
       return elements;
     }

@@ -354,6 +354,28 @@ function solid(key: string, x: number, z: number, rot: number, col: V3 | null, c
   );
 }
 
+/* ---------- מבנה בודד לשימוש חיצוני (מסך האימון) ---------- */
+// משתמש באותו houseGroup ובאותה עטיפת-פיזיקה של הכפר, כדי שהמבנים במסך
+// האימון יהיו זהים לאלה שבסשנים האמיתיים — רק מעטים ומפוזרים, בלי עיר שלמה.
+export function VillageHouse({
+  x, z, rot = 0, w = 3.6, d = 3.4, h = 3.2, seed = 1,
+  condition = 'intact', visualsOnly = false,
+}: {
+  x: number; z: number; rot?: number; w?: number; d?: number; h?: number;
+  seed?: number; condition?: string; visualsOnly?: boolean;
+}) {
+  const node = useMemo(() => {
+    // אותו מחולל אקראיות של הכפר (חלונות, כתמים, גוון) — רק עם זרע משלו,
+    // כך שכל מבנה נראה אחרת אבל נשאר יציב בין רינדורים.
+    let sd = seed * 1013 + 7;
+    const rnd = () => { const v = Math.sin(sd++) * 43758.5453; return v - Math.floor(v); };
+    const color = PLASTER[Math.floor(rnd() * PLASTER.length)];
+    return houseGroup(w, d, h, color, condition, rnd);
+  }, [w, d, h, seed, condition]);
+
+  return solid(`practice-house-${seed}`, x, z, rot, [w / 2, h / 2, d / 2], h / 2, visualsOnly, node);
+}
+
 /* ================= הכפר ================= */
 const DENSITY = 1.4;
 
