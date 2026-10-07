@@ -20,6 +20,7 @@ import { DroneControls, DroneVisuals } from './components/Drone';
 import { VideoSourcePicker } from './components/VideoSourcePicker';
 import { MapLabels } from './components/MapLabels';
 import { MapView } from './components/MapView';
+import { VideoLink, VideoFeedTap } from './components/VideoLink';
 import { useTelemetryStore, ViewMode, ScreenLayout } from './store';
 // שכבת-תאימות הג'ויסטיקים (A10C ⇄ Solaris) — מיפוי כפתורים גלובליים + ניווט בתפריט.
 import {
@@ -496,6 +497,7 @@ export default function App() {
                 onMouseDown={() => setActivePane(2)}
                 className={`flex-1 w-full relative pointer-events-auto rounded-sm overflow-hidden border-3 transition-colors ${activePane === 2 ? 'border-green-400' : 'border-transparent'}`}
               >
+                <VideoLink source={videoSlot2} />
                 <VideoSourcePicker slot={2} />
                                 <DroneOffCover slot={2} />
                 {sym && (
@@ -507,6 +509,7 @@ export default function App() {
                 onMouseDown={() => setActivePane(3)}
                 className={`flex-1 w-full relative pointer-events-auto rounded-sm overflow-hidden border-3 transition-colors ${activePane === 3 ? 'border-green-400' : 'border-transparent'}`}
               >
+                <VideoLink source={videoSlot1} />
                 <VideoSourcePicker slot={1} />
                                 <DroneOffCover slot={1} />
                 {sym && (
@@ -523,7 +526,8 @@ export default function App() {
               onMouseDown={() => setActivePane(1)}
               className={`flex-1 h-full relative pointer-events-auto rounded-sm overflow-hidden border-3 transition-colors ${activePane === 1 ? 'border-green-400' : 'border-transparent'}`}
             >
-              <VideoSourcePicker slot={1} />
+              <VideoLink source={videoSlot1} />
+                <VideoSourcePicker slot={1} />
                             <DroneOffCover slot={1} />
               {sym && (
                 <InfoBar source={videoSlot1} showHorizon={layers.horizon} showCompass={layers.compass} showCenterAttitude={layers.centerAttitude} scale={0.6} />
@@ -534,7 +538,8 @@ export default function App() {
               onMouseDown={() => setActivePane(2)}
               className={`flex-1 h-full relative pointer-events-auto rounded-sm overflow-hidden border-3 transition-colors ${activePane === 2 ? 'border-green-400' : 'border-transparent'}`}
             >
-              <VideoSourcePicker slot={2} />
+              <VideoLink source={videoSlot2} />
+                <VideoSourcePicker slot={2} />
                             <DroneOffCover slot={2} />
               {sym && (
                 <InfoBar source={videoSlot2} showHorizon={layers.horizon} showCompass={layers.compass} showCenterAttitude={layers.centerAttitude} scale={0.6} />
@@ -548,7 +553,8 @@ export default function App() {
               onMouseDown={() => setActivePane(2)}
               className={`flex-1 h-full relative pointer-events-auto rounded-sm overflow-hidden border-3 transition-colors ${activePane === 2 ? 'border-green-400' : 'border-transparent'}`}
             >
-              <VideoSourcePicker slot={2} />
+              <VideoLink source={videoSlot2} />
+                <VideoSourcePicker slot={2} />
                             <DroneOffCover slot={2} />
               {sym && (
                 <InfoBar source={videoSlot2} showHorizon={layers.horizon} showCompass={layers.compass} showCenterAttitude={layers.centerAttitude} scale={0.6} />
@@ -558,7 +564,8 @@ export default function App() {
           </>
         ) : (
           <div ref={view1Ref} className="w-full h-full relative pointer-events-auto">
-            <VideoSourcePicker slot={1} />
+            <VideoLink source={videoSlot1} />
+                <VideoSourcePicker slot={1} />
                         <DroneOffCover slot={1} />
             {sym && (
               <InfoBar source={videoSlot1} showHorizon={layers.horizon} showCompass={layers.compass} showCenterAttitude={layers.centerAttitude} scale={1} />
@@ -652,6 +659,9 @@ export default function App() {
             )}
           </View>
         )}
+
+        {/* חייב להיות אחרון: דוגם את החלוניות המושהות בסוף לולאת הציור */}
+        <VideoFeedTap />
       </Canvas>
 
       {/* ה-InfoBar עבר לתוך כל חלונית חוזי (ראי הפריסה למעלה). */}

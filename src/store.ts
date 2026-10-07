@@ -1,5 +1,8 @@
 // File: src/store.ts
 import { create } from 'zustand';
+import {
+  CamSource, VideoLinkParams, VIDEO_LINK_DEFAULTS, VIDEO_LINK_LIMITS,
+} from './videoLink';
 import { RapierRigidBody } from '@react-three/rapier';
 import * as THREE from 'three';
 
@@ -153,6 +156,19 @@ interface TelemetryState {
   psSensitivity: number;
   setPsDeadzone: (v: number) => void;
   setPsSensitivity: (v: number) => void;
+  // --- הגדרות רגישות פרופיל הגה+דוושות (Logitech G920) ---
+  // חלות אך ורק על ההגה בניהוג מצב ג' — נפרד לגמרי מהסטיקים ומשלט ה-PS.
+  wheelDeadzone: number;     // אזור מת סביב מרכז ההגה (0..0.4)
+  wheelRange: number;        // טווח הסיבוב הפיזי שנחשב ל-100% (0.3..1.0)
+  pedalSensitivity: number;  // הגבר על הגז/רוורס מהדוושות (0.2..2.0)
+  setWheelDeadzone: (v: number) => void;
+  setWheelRange: (v: number) => void;
+  setPedalSensitivity: (v: number) => void;
+  // --- פרמטרים של קו-הווידאו, בנפרד לכל מצלמה (רובוט / רחפן) ---
+  // מאפיינים של המצלמה ושל קו השידור בלבד. הסימולציה עצמה רצה תמיד בקצב מלא.
+  videoLink: Record<CamSource, VideoLinkParams>;
+  setVideoLink: (src: CamSource, patch: Partial<VideoLinkParams>) => void;
+  resetVideoLink: (src: CamSource) => void;
   setViewMode: (mode: ViewMode) => void;
         screenLayout: ScreenLayout;
   setScreenLayout: (layout: ScreenLayout) => void;
@@ -440,6 +456,34 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   psSensitivity: 0.70,
   setPsDeadzone: (v) => set({ psDeadzone: Math.max(0, Math.min(0.5, v)) }),
   setPsSensitivity: (v) => set({ psSensitivity: Math.max(0.2, Math.min(2.0, v)) }),
+  // פרופיל הגה+דוושות — ברירות המחדל הן הערכים שהיו קבועים ב-wheelInput.ts
+  wheelDeadzone: 0.05,
+  wheelRange: 0.7,
+  pedalSensitivity: 1.0,
+  setWheelDeadzone: (v) => set({ wheelDeadzone: Math.max(0, Math.min(0.4, v)) }),
+  setWheelRange: (v) => set({ wheelRange: Math.max(0.3, Math.min(1.0, v)) }),
+  setPedalSensitivity: (v) => set({ pedalSensitivity: Math.max(0.2, Math.min(2.0, v)) }),
+  // קו-הווידאו — ברירת המחדל היא קו "מושלם": קצב מלא, בלי השהייה ובלי רעידה,
+  // כלומר בדיוק ההתנהגות שהייתה לפני שהפרמטרים האלה נחשפו.
+  videoLink: {
+    robot: { ...VIDEO_LINK_DEFAULTS },
+    drone: { ...VIDEO_LINK_DEFAULTS },
+  },
+  setVideoLink: (src, patch) => set((s) => {
+    const clamp = (k: keyof VideoLinkParams, v: number) => {
+      const lim = VIDEO_LINK_LIMITS[k];
+      return Math.max(lim.min, Math.min(lim.max, v));
+    };
+    const next = { ...s.videoLink[src] };
+    for (const k of Object.keys(patch) as (keyof VideoLinkParams)[]) {
+      const v = patch[k];
+      if (v !== undefined) next[k] = clamp(k, v);
+    }
+    return { videoLink: { ...s.videoLink, [src]: next } };
+  }),
+  resetVideoLink: (src) => set((s) => ({
+    videoLink: { ...s.videoLink, [src]: { ...VIDEO_LINK_DEFAULTS } },
+  })),
         screenLayout: ScreenLayout.FULL_VIDEO,
   setScreenLayout: (layout) => {
     const s = get();
