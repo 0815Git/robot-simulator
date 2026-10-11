@@ -18,20 +18,35 @@ import { useTelemetryStore } from './store';
 // הזה null". לכן אפשר לשנות התנהגות של הגה אחת בלי לגעת בשנייה ובלי לקרוא
 // את הלוגיקה בכלל, ואפשר להוסיף הגה שלישית בהוספת רשומה ל-WHEELS.
 
-/** מאיפה מגיעה נהיגת הרובוט. */
-export type DriveSource = 'pedals' | 'axis';
-/** מאיפה מגיעה המראת הרחפן. */
-export type LaunchSource = 'hat' | 'throttle';
+/**
+ * מאיפה מגיעה נהיגת הרובוט.
+ *   'pedals'   — שני צירים חד-כיווניים (גז/רוורס)
+ *   'axis'     — ציר דו-כיווני שנח במרכז
+ *   'throttle' — מצעד שערך-המנוחה שלו אינו ידוע, ונקרא *יחסית* אליו
+ */
+export type DriveSource = 'pedals' | 'axis' | 'throttle';
+/**
+ * מאיפה מגיעה המראת הרחפן.
+ *   'hat'      — ה-HAT מעלה (אותו פקד ששולט גם בגובה)
+ *   'button'   — כפתור ייעודי, בלי שיתוף עם שום פקד אחר
+ *   'throttle' — מצעד; נתמך אך אינו בשימוש, כי שיתוף המצעד עם הגז גרם
+ *                לכך שדחיפת גז על הקרקע הייתה ממריאה את הרחפן
+ */
+export type LaunchSource = 'hat' | 'button' | 'throttle';
 /** מאיפה מגיעה הטיית אף הרחפן. */
 export type NoseSource = 'buttons' | 'axis' | 'none';
 /** מאיפה מגיעה הסעת הרחפן קדימה/אחורה. */
 export type ThrustSource = 'pedals' | 'axis';
 
-export const VELOCITY_ONE_DRIVE_SIGN = -1;
+// ---- כיווני הצירים של VelocityOne ----
+// AXIS 1 (דחיפה/משיכה של ההגה) משמש *רק* להטיית אף הרחפן. אין לו שום תפקיד
+// בנהיגת הרובוט: דחיפה או משיכה אינן מזיזות את הרובוט בכלל.
+// אומת מול המכשיר: דחיפה = אף מטה, משיכה = אף מעלה.
+export const VELOCITY_ONE_NOSE_SIGN = -1;
 
-// גז הרחפן (AXIS 2) — פקד נפרד מההגה, ולכן סימן נפרד שאפשר להפוך לבד.
-// הנחה: דחיפת המצעד קדימה = ערך שלילי = טיסה קדימה לכיוון האף.
-export const VELOCITY_ONE_THRUST_SIGN = -1;
+// AXIS 2 — הגז. אומת מול המכשיר: הצד הימני = קדימה, השמאלי = אחורה.
+// אותו ציר ואותו סימן מניעים גם את הרחפן וגם את הרובוט, כדי שהגז ירגיש זהה.
+export const VELOCITY_ONE_THRUST_SIGN = 1;
 
 export const WHEEL_AXIS   = 0;   // ציר סיבוב ההגה
 export const GAS_AXIS     = 1;   // דוושת גז (קדימה)
@@ -109,6 +124,7 @@ export interface WheelSpec {
   thrustAxis: number | null;    // ציר הסעת הרחפן — כש-thrustSource='axis'
   noseAxis: number | null;      // ציר הטיית האף — כש-noseSource='axis'
   launchAxis: number | null;    // ציר ההמראה — כש-launchSource='throttle'
+  launchBtn: number | null;     // כפתור ההמראה — כש-launchSource='button'
   droneLinkAxis: number | null; // ציר צימוד רובוט⇄רחפן
 
   // ===== כפתורים =====
@@ -120,6 +136,7 @@ export interface WheelSpec {
   menuLeft: number;
   menuRight: number;
   paneSwitch: number;           // מעבר שליטה בין החלוניות
+  povCycle: number | null;      // מחזור POV של הרובוט (POV1→POV2→POV3)
   droneLinkBtn: number | null;  // כפתור צימוד רובוט⇄רחפן
   noseUp: number | null;        // הרמת אף — כש-noseSource='buttons'
   noseDown: number | null;      // הורדת אף — כש-noseSource='buttons'
@@ -160,6 +177,7 @@ export const G920_WHEEL: WheelSpec = {
   thrustAxis: null,
   noseAxis: null,
   launchAxis: null,
+  launchBtn: null,              // ההמראה כאן היא ה-HAT מעלה
   droneLinkAxis: 5,
 
   gasBtn: GAS_BTN,
@@ -170,6 +188,7 @@ export const G920_WHEEL: WheelSpec = {
   menuLeft: 2,
   menuRight: 1,
   paneSwitch: 7,
+  povCycle: null,               // טרם נבחר כפתור בהגה הזו
   droneLinkBtn: null,
   noseUp: 4,
   noseDown: 5,
@@ -186,10 +205,10 @@ export const VELOCITY_ONE_WHEEL: WheelSpec = {
   // ולעתים אין בו שם קריא כלל.
   matches: (id) => /velocity\s*one/i.test(id) || (/10f5/i.test(id) && /7004/i.test(id)),
 
-  driveSource: 'axis',          // AXIS 1, דחיפה/משיכה
+  driveSource: 'throttle',      // AXIS 2 — *אותו* גז של הרחפן
   thrustSource: 'axis',         // AXIS 2, המצעד
-  launchSource: 'throttle',     // אותו מצעד, על הקרקע
-  noseSource: 'axis',           // AXIS 1, כששולטים ברחפן
+  launchSource: 'button',       // B4 — כפתור ייעודי, בלי שיתוף עם הגז
+  noseSource: 'axis',           // AXIS 1 — אף הרחפן בלבד
 
   // ההמראה היא ציר נפרד מה-HAT, ולכן אין התנגשות: מרימה כל עוד מחזיקים,
   // עד תקרת ההמראה — בדיוק כמו בשאר אופני הניהוג.
@@ -199,13 +218,14 @@ export const VELOCITY_ONE_WHEEL: WheelSpec = {
   noseAutoLevel: false,
 
   steerAxis: 0,
-  driveAxis: 1,
+  driveAxis: 2,                 // הגז — אותו ציר של thrustAxis, ראה readWheelDrive
   gasAxis: null,
   reverseAxis: null,
   hatAxis: 9,                   // גובה + הליכה סרטנית, כמו ב-G920
   thrustAxis: 2,
   noseAxis: 1,
-  launchAxis: 2,
+  launchAxis: null,             // המצעד שוחרר מתפקיד ההמראה — ראה launchBtn
+  launchBtn: 4,                 // המראת הרחפן מהרובוט
   droneLinkAxis: null,
 
   gasBtn: null,
@@ -216,10 +236,11 @@ export const VELOCITY_ONE_WHEEL: WheelSpec = {
   menuLeft: 19,
   menuRight: 17,
   paneSwitch: 8,
+  povCycle: 5,                  // מחזור ה-POV של הרובוט
   droneLinkBtn: 2,
   noseUp: null,
   noseDown: null,
-  dissolveBtn: null,            // טרם נבחר כפתור בהגה הזו
+  dissolveBtn: 10,              // נטרול המטרה — כמו מקש F
 };
 
 // כל ההגות המוכרות. להוספת הגה — להוסיף רשומה כאן ולא לגעת בלוגיקה.
@@ -289,8 +310,8 @@ export const wheelHat = (p: Gamepad | null): { x: number; y: number } =>
 /** כפתור של ההגה לפי תפקיד לוגי. תפקיד שאינו קיים בהגה הזו מחזיר false. */
 export type WheelBtnRole =
   | 'gasBtn' | 'reverseBtn' | 'layoutMenu' | 'menuUp' | 'menuDown' | 'menuLeft'
-  | 'menuRight' | 'paneSwitch' | 'droneLinkBtn' | 'noseUp' | 'noseDown'
-  | 'dissolveBtn';
+  | 'menuRight' | 'paneSwitch' | 'povCycle' | 'droneLinkBtn' | 'noseUp'
+  | 'noseDown' | 'dissolveBtn' | 'launchBtn';
 
 export const wheelBtn = (p: Gamepad | null, role: WheelBtnRole): boolean => {
   if (!p) return false;
@@ -354,18 +375,18 @@ export function axisFromRest(
 export const LAUNCH_THROTTLE_THRESHOLD = 0.5;
 
 /**
- * האם פקד ההמראה של ההגה פעיל (VelocityOne: המצעד קדימה · G920: ה-HAT מעלה).
+ * האם פקד ההמראה של ההגה פעיל (VelocityOne: B4 · G920: ה-HAT מעלה).
  *
- * חשוב: במצעד נבדקת *דחיפה קדימה בלבד*, ולא גודל הסטייה מערך-המנוחה. משיכה
- * אחורה היא גז אחורי של הרחפן, והיא לא אמורה להרים אותו מהרובוט. הכיוון נגזר
- * מאותו VELOCITY_ONE_THRUST_SIGN של הגז, ולכן אם הסימן יתברר הפוך — ההמראה והגז
- * מתהפכים יחד ונשארים עקביים.
+ * ב-VelocityOne ההמראה ישבה קודם על המצעד (AXIS 2), שהוא גם הגז — ולכן דחיפת
+ * גז קדימה על הקרקע הייתה ממריאה את הרחפן. כפתור ייעודי מסיר את ההתנגשות
+ * לגמרי, והמצעד נשאר גז בלבד.
  */
 export const wheelLaunchActive = (
   p: Gamepad | null, cal: WheelCal = wheelCal(),
 ): boolean => {
   if (!p) return false;
   const m = wheelMapOf(p);
+  if (m.launchSource === 'button') return wheelBtn(p, 'launchBtn');
   if (m.launchSource === 'throttle') {
     const fwd = axisFromRest(p, m.launchAxis, cal.deadzone) * VELOCITY_ONE_THRUST_SIGN;
     return fwd > LAUNCH_THROTTLE_THRESHOLD;
@@ -446,7 +467,7 @@ export function readWheelFlight(
   // האף הוא ההיפוך של כיוון הנהיגה: דחיפה (drive חיובי) → האף יורד.
   // קשירה לאותו קבוע סימן מבטיחה שאם כיוון הציר יתברר הפוך, שניהם יתהפכו יחד.
   const noseRate = m.noseSource !== 'axis' ? 0
-    : -(normBipolar(ax?.[m.noseAxis] ?? 0, cal.deadzone) * VELOCITY_ONE_DRIVE_SIGN);
+    : -(normBipolar(ax?.[m.noseAxis] ?? 0, cal.deadzone) * VELOCITY_ONE_NOSE_SIGN);
 
   return { fwd, turn: -2 * steer, noseRate };
 }
@@ -482,11 +503,18 @@ export function readWheelDrive(
 
   let gas: number, reverse: number;
 
-  if (m.driveSource === 'axis') {
-    // ===== ציר נהיגה אחד דו-כיווני (VelocityOne): דחיפה = קדימה, משיכה = אחורה =====
-    // מחוון "Pedal Sensitivity" ממשיך להיות ההגבר על הנהיגה, בדיוק כמו בדוושות,
-    // כך שאותו פרופיל בתפריט ההגדרות משרת את שתי ההגות.
-    const raw = normBipolar(ax?.[m.driveAxis] ?? 0, cal.deadzone) * VELOCITY_ONE_DRIVE_SIGN;
+  if (m.driveSource === 'throttle') {
+    // ===== מצעד (VelocityOne): *אותו* גז שמניע את הרחפן =====
+    // נקרא יחסית לערך-המנוחה ולא כציר שנח במרכז, כי לא ידוע אם המצעד נח במרכז
+    // או בקצה. אותה קריאה ואותו סימן כמו ב-readWheelFlight, כדי שהגז ירגיש זהה
+    // ברובוט וברחפן. "Pedal Sensitivity" הוא ההגבר, בדיוק כמו בדוושות.
+    const raw = axisFromRest(pad, m.driveAxis, cal.deadzone) * VELOCITY_ONE_THRUST_SIGN;
+    const d = Math.max(-1, Math.min(1, raw * cal.pedalSensitivity));
+    gas = Math.max(0, d);
+    reverse = Math.max(0, -d);
+  } else if (m.driveSource === 'axis') {
+    // ===== ציר נהיגה דו-כיווני שנח במרכז =====
+    const raw = normBipolar(ax?.[m.driveAxis] ?? 0, cal.deadzone);
     const d = Math.max(-1, Math.min(1, raw * cal.pedalSensitivity));
     gas = Math.max(0, d);
     reverse = Math.max(0, -d);

@@ -240,7 +240,7 @@ export default function App() {
     // ===== ההגה (G920 / VelocityOne Flight) — מכשיר נפרד לגמרי (רק מצב ניהוג 'C') =====
     // כל תפקיד נקרא דרך wheelMapOf, ולכן אותו קוד משרת את שתי ההגות למרות שהאינדקסים
     // שונים לגמרי (G920: B6/B0-B3/B7 · VelocityOne: B9/B16-B19/B8).
-    const whRolePressed = (role: 'layoutMenu' | 'menuUp' | 'menuDown' | 'menuLeft' | 'menuRight' | 'paneSwitch' | 'droneLinkBtn') => {
+    const whRolePressed = (role: 'layoutMenu' | 'menuUp' | 'menuDown' | 'menuLeft' | 'menuRight' | 'paneSwitch' | 'povCycle' | 'droneLinkBtn') => {
       const pads = (navigator.getGamepads?.() || []);
       for (const p of pads) {
         if (!isWheelPad(p)) continue;
@@ -428,7 +428,7 @@ export default function App() {
       // ===== כפתורי ההגה — פעילים רק כשמצב הניהוג 'C' =====
       // התפקידים זהים בשתי ההגות; האינדקסים מגיעים מ-wheelMapOf:
       //   G920        — layout=B6 · מעלה=B3 מטה=B0 שמאלה=B2 ימינה=B1 · חלונית=B7 · צימוד=AXIS 5
-      //   VelocityOne — layout=B9 · מעלה=B16 מטה=B18 שמאלה=B19 ימינה=B17 · חלונית=B8 · צימוד=B2
+      //   VelocityOne — layout=B9 · מעלה=B16 מטה=B18 שמאלה=B19 ימינה=B17 · חלונית=B8 · צימוד=B2 · POV=B5
       const whActive = st.steerMode === 'C' && (navigator.getGamepads?.() || []).some(isWheelPad);
 
       if (whActive) {
@@ -448,6 +448,7 @@ export default function App() {
           if (c !== st.layoutCursor) st.setLayoutCursor(c);
           // "בולעים" את התפקידים של מצב-סגור כדי שלא יזלגו ברגע הסגירה
           prev['whPane'] = whRolePressed('paneSwitch');
+          prev['whPov']  = whRolePressed('povCycle');
         } else {
           // מעביר שליטה בין החלוניות (בדיוק כמו B1 בג'ויסטיק / ריבוע בשלט PS)
           if (whJustPressed('whPane', 'paneSwitch')) {
@@ -466,6 +467,13 @@ export default function App() {
             whRolePressed('droneLinkBtn');
           if (down && !linkDown) st.toggleDroneManual();
           linkDown = down;
+
+          // מחזור POV של הרובוט (POV1→POV2→POV3), כמו B3 בג'ויסטיק.
+          // קיים רק בהגה שהצהירה על povCycle; בשנייה השדה null ואינו נקרא.
+          if (whJustPressed('whPov', 'povCycle')) {
+            const i = POV_CYCLE.indexOf(st.viewMode);
+            st.setViewMode(POV_CYCLE[(i + 1) % POV_CYCLE.length]);
+          }
 
           // "בולעים" את כפתורי-החצים כדי שלא יזלגו ברגע פתיחת התפריט
           prev['whRight'] = whRolePressed('menuRight'); prev['whLeft'] = whRolePressed('menuLeft');
