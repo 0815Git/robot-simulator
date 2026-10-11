@@ -7,8 +7,9 @@ import * as THREE from 'three';
 import { useKeyboard } from '../hooks/useKeyboard';
 import { getGamepadAxes } from '../hooks/useGamepads';
 import { useTelemetryStore, ViewMode, ROCKET_MAN_POS, TARGET_RANGE_M } from '../store';
-// מיפוי ההגה (Logitech G920) יושב ב-src/wheelInput.ts — מקור-אמת יחיד לרובוט ולרחפן.
-import { decodeHatAxis, readWheelDrive } from '../wheelInput';
+// מיפוי ההגות (G920 / VelocityOne Flight) יושב ב-src/wheelInput.ts — מקור-אמת יחיד
+// לרובוט ולרחפן, ומתרגם כל תפקיד לפי סוג ההתקן.
+import { readWheelDrive, isWheelPad, wheelLaunchActive, wheelLaunchSharesHat } from '../wheelInput';
 import { PS_CAM_MOD_HELD } from './Drone';
 import { physicsEnv } from '../physicsEnv';
 // שכבת-תאימות הג'ויסטיקים (A10C ⇄ Solaris). לא נוגעת בצירים 0/1.
@@ -178,17 +179,27 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
         && (psPad?.buttons?.[12]?.pressed || false);
 
       // Thrustmaster וכו': הדק-שמאל (B0/B5 של המכשיר השמאלי שאינו שלט ואינו הגה)
-      const otherPads = allPads.filter(p => p && !/g920|logitech|racing wheel/i.test(p.id) && !psRe.test(p.id)) as Gamepad[];
+      const otherPads = allPads.filter(p => p && !isWheelPad(p) && !psRe.test(p.id)) as Gamepad[];
       // נועלים את הגריף השמאלי לפי id (Solaris) ולא לפי סדר החיבור, שעלול להשתנות.
       const leftPad = sortGrips(otherPads)[0] || null;
       // A10C: B0/B5 של הגריף השמאלי. Solaris: ההדק (B23). שניהם דרך padLaunch.
       const tmLaunch = padLaunch(leftPad);
 
-      // הגה G920 (מצב ג'): AXIS 9 למעלה = המראה מהרובוט. ברגע שהרחפן באוויר, המשך
-      // הטיפוס עובר ל-Drone.tsx (כדי שלא ייספר פעמיים באותו פריים).
-      const wheelPadL = allPads.find(p => p && /g920|logitech|racing wheel/i.test(p.id)) || null;
-      const wheelHatUp = decodeHatAxis(wheelPadL?.axes?.[9]).y < 0;
-      const whLaunch = st.steerMode === 'C' && !st.layoutMenuOpen && !st.droneLaunched && wheelHatUp;
+      // ההגה (מצב ג'): המראה מהרובוט — G920 דרך ה-HAT למעלה, VelocityOne דרך AXIS 2.
+      // wheelLaunchActive בוחר את הפקד הנכון לפי סוג ההגה.
+      // ב-G920 ההמראה *היא* ה-HAT, ולכן היא נעצרת ברגע שהרחפן באוויר והטיפוס עובר
+      // ל-Drone.tsx (אחרת אותה דחיפה הייתה נספרת פעמיים באותו פריים). ב-VelocityOne
+      // ההמראה היא ציר נפרד, ולכן היא מעלה כל עוד מחזיקים — עד התקרה — בדיוק כמו
+      // בשאר אופני הניהוג (שלט PS ו-Thrustmaster).
+      const wheelPadL = allPads.find(isWheelPad) || null;
+      const whLaunch = st.steerMode === 'C' && !st.layoutMenuOpen
+        && wheelLaunchActive(wheelPadL)
+        && !(wheelLaunchSharesHat(wheelPadL) && st.droneLaunched)
+        // ברגע שהרחפן באוויר, המשך ההרמה מהמצעד שייך לשליטה על *הרובוט* בלבד:
+        // כששולטים על הרחפן אותה דחיפה היא הגז קדימה שלו (readWheelFlight), ובלי
+        // התנאי הזה היא גם הייתה מרימה אותו בגובה באותו פריים.
+        // לפני ההמראה אין חסימה — תמיד אפשר להעלות את הרחפן, מכל חלונית.
+        && !(st.droneLaunched && st.isControllingDrone());
 
       if ((psLaunch || tmLaunch || whLaunch) && !atCeiling) {
         st.launchDrone(LAUNCH_SPEED * delta);
@@ -223,7 +234,7 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
     {
       const st2 = useTelemetryStore.getState();
       const psRe2 = /dualsense|dualshock|wireless controller|054c|sony/i;
-      const sticks2 = allPads.filter(p => p && !/g920|logitech|racing wheel/i.test(p.id) && !psRe2.test(p.id)) as Gamepad[];
+      const sticks2 = allPads.filter(p => p && !isWheelPad(p) && !psRe2.test(p.id)) as Gamepad[];
       // צימוד/ניתוק: A10C = B2, Solaris = B27. לכל התקן האינדקס שלו דרך btnMapOf.
       const b2Now = st2.steerMode === 'B' && sticks2.some(p => p.buttons?.[btnMapOf(p).droneLink]?.pressed);
       if (b2Now && !prevLinkBtnRef.current) {
@@ -246,13 +257,10 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       return;
     }
 
-    // מזהים את ההגה לפי ה-id (G920 / Logitech) ומבודדים אותו מהג'ויסטיקים.
-    // כך מצבים A/B רואים רק סטיקים אמיתיים, וההגה משמש רק את מצב C.
-    const isWheel = (p: Gamepad | null) =>
-      !!p && /g920|logitech|racing wheel/i.test(p.id);
-
-    const wheelPad = allPads.find(isWheel) || null;
-    const stickPads = allPads.filter(p => p && !isWheel(p));
+    // מזהים את ההגה לפי ה-id (G920 או VelocityOne) ומבודדים אותה מהג'ויסטיקים.
+    // כך מצבים A/B רואים רק סטיקים אמיתיים, וההגה משמשת רק את מצב C.
+    const wheelPad = allPads.find(isWheelPad) || null;
+    const stickPads = allPads.filter(p => p && !isWheelPad(p));
 
     // Solaris: נעילת שמאל/ימין לפי product id. A10C: סדר החיבור כמקודם.
     const ordered = sortGrips(stickPads);
@@ -480,7 +488,7 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       aimLockedRef.current = false;
     }
 
-    // ===== מצב ג': הגה + דוושות =====
+    // ===== מצב ג': הגה (G920 עם דוושות / VelocityOne עם ציר דחיפה-משיכה) =====
     if (modeRef.current === 'C') {
       // כשתפריט הלייאאוט פתוח — B0/B1 משמשים לדפדוף (מטה/ימינה), ולכן אינם גז/רוורס.
       const w = readWheelDrive(wheelPad, { ignoreButtons: layoutMenuOpen });

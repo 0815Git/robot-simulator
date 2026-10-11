@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { useTelemetryStore, ScreenLayout} from '../store';
 import { useKeyboard } from '../hooks/useKeyboard';
 // מיפוי ההגה + מפענח האט — משותף עם הרובוט, כדי שהתחושה תהיה זהה בשני הכלים.
-import { decodeHatAxis, isWheelPad, readWheelDrive } from '../wheelInput';
+import { decodeHatAxis, isWheelPad, readWheelDrive, readWheelFlight, wheelHat } from '../wheelInput';
 // התנגשות הרחפן בגבעות/מבנים — כל תזוזה עוברת דרך resolveDroneMove.
 import { resolveDroneMove } from '../droneCollision';
 
@@ -169,9 +169,8 @@ export function DroneControls() {
 
         if (dronePaneActive) {
           const padsX = navigator.getGamepads();
-          const isWheelX = (p: Gamepad | null) => !!p && /g920|logitech|racing wheel/i.test(p.id);
           const isPsX = (p: Gamepad | null) => !!p && /dualsense|dualshock|wireless controller|054c|sony/i.test(p.id);
-          const stx = sortGrips(padsX.filter(p => p && !isWheelX(p) && !isPsX(p))); // Solaris: נעול לפי id
+          const stx = sortGrips(padsX.filter(p => p && !isWheelPad(p) && !isPsX(p))); // Solaris: נעול לפי id
           const gL = stx[0] || null, gR = stx[1] || null;
           // פקד טיסה פעיל = נהיגה דיפרנציאלית (A10C: B6/B8 · Solaris: HAT) בכל צד,
           // או גובה/הסטה (A10C: HAT · Solaris: צירים 4/3 בגריף הימני).
@@ -245,11 +244,12 @@ export function DroneControls() {
         }
       }
 
-      // ===== הגה G920 (מצב ג') — שליטת גובה גם כשעומדים על חלונית הרובוט =====
-      // AXIS 9 למעלה/למטה = טיפוס/ירידה. ההמראה עצמה (מהרובוט) מטופלת ב-Robot.tsx.
+      // ===== ההגה (מצב ג') — שליטת גובה גם כשעומדים על חלונית הרובוט =====
+      // ה-HAT למעלה/למטה = טיפוס/ירידה, בשתי ההגות (AXIS 9 בשתיהן, דרך wheelHat).
+      // ההמראה עצמה (מהרובוט) מטופלת ב-Robot.tsx.
       const whPadH = pads.find(isWheelPad) || null;
       if (s.steerMode === 'C' && whPadH && s.droneLaunched) {
-        const hatW = decodeHatAxis(whPadH.axes?.[9]);
+        const hatW = wheelHat(whPadH);
         if (hatW.y !== 0) {
           if (!s.droneManual) {
             // צימוד: מפקדים את יעד גובה המעקב (הגובה בפועל זוחל אליו ברכוך, למטה).
@@ -435,40 +435,43 @@ export function DroneControls() {
         if (bodyPitch !== s.droneBodyPitch) s.setDroneBodyPitch(bodyPitch);
       }
 
-      // ===== הגה G920 (מצב ג'): גז/ברקס/הגה = נהיגה, AXIS 9 = גובה + הליכה סרטנית, B4/B5 = אף =====
+      // ===== ההגה (מצב ג'): הסעה + סיבוב + אף, AXIS 9 = גובה + הליכה סרטנית =====
+      // כל התפקידים עוברים דרך שכבת-התאימות, ולכן הנתיב הזה משרת גם את ה-G920
+      // וגם את ה-VelocityOne Flight למרות מיפוי כפתורים שונה לגמרי.
       const wheelPadF = allPads.find(isWheelPad) || null;
       if (wheelPadF && s.steerMode === 'C') {
         const [px, py, pz] = s.dronePosition;
         let nx = px, ny = py, nz = pz;
 
-        // B4 = הרמת האף, B5 = הורדת האף. הזווית נשמרת עד שמחזירים אותה ידנית.
-        const wb = wheelPadF.buttons;
-        const NOSE_RATE = 1.2;                // rad/s
-        if (wb?.[4]?.pressed) bodyPitch += NOSE_RATE * delta;
-        if (wb?.[5]?.pressed) bodyPitch -= NOSE_RATE * delta;
+        // ===== פקדי הטיסה — הסעה, סיבוב והטיית אף =====
+        // readWheelFlight בוחר את הפקדים לפי סוג ההגה (G920: דוושות+הגה+B4/B5 ·
+        // VelocityOne: AXIS 6 מסיע, ההגה מסובבת, AXIS 1 הוא האף). הקצבים כאן זהים
+        // לשאר הכלים, ולכן התחושה אחידה בכל אופני הניהוג.
+        const wf = readWheelFlight(wheelPadF);
+
+        // הטיית האף. הזווית נשמרת עד שמחזירים אותה ידנית — אין התיישרות אוטומטית
+        // לאופק כמו בשלט ה-PS, כי כאן האף הוא פקד *עמדה* (כפתור מוחזק או ציר),
+        // והתיישרות אוטומטית הייתה נלחמת בכיוון שהמשתמשת מחזיקה עכשיו.
+        const NOSE_RATE = 1.2;                // rad/s — זהה לשלט ה-PS
+        bodyPitch += wf.noseRate * NOSE_RATE * delta;
         bodyPitch = Math.max(-NOSE_MAX_ANGLE, Math.min(NOSE_MAX_ANGLE, bodyPitch));
         if (bodyPitch !== s.droneBodyPitch) s.setDroneBodyPitch(bodyPitch);
 
-        // ===== גז / ברקס / הגה — בדיוק אותו מיקס דיפרנציאלי שמניע את הרובוט =====
-        // readWheelDrive מחזיר את אותם left/right שהזחלים מקבלים. כאן מתרגמים אותם
-        // לרחפן: הממוצע = תנועה קדימה/אחורה לכיוון האף, וההפרש = סיבוב הגוף.
-        // כך גז+הגה מלא מסובב סביב "זחל עומד" בדיוק כמו ברובוט, וההגה לבדו מסובב במקום.
-        const w = readWheelDrive(wheelPadF);
-        const fwd  = (w.left + w.right) / 2;   // -1..1
-        const turn = w.right - w.left;         // ימינה = שלילי → היאו קטן, כמו ברובוט
+        const fwd  = wf.fwd;                   // -1..1
+        const turn = wf.turn;                  // ימינה = שלילי → היאו קטן, כמו ברובוט
         bodyYaw += turn * DIFF_YAW_RATE * delta;
 
         const fX = -Math.sin(bodyYaw), fZ = -Math.cos(bodyYaw);
         // ציר "ימינה" של גוף הרחפן — ההסטה הצידה נעשית יחסית לאף, ולכן זו הליכה סרטנית.
         const rX = Math.cos(bodyYaw), rZ = -Math.sin(bodyYaw);
 
-        // תנועה קדימה/אחורה לפי הדוושות. כשהאף מוטה — חלק מהמהירות הופך לטיפוס/צניחה,
-        // בדיוק כמו בנתיב ההדק של הג'ויסטיק.
+        // תנועה קדימה/אחורה לפי פקד ההסעה. כשהאף מוטה — חלק מהמהירות הופך
+        // לטיפוס/צניחה, בדיוק כמו בנתיב ההדק של הג'ויסטיק ובשלט ה-PS.
         const horiz = fwd * Math.cos(bodyPitch);
         nx += fX * horiz * step; nz += fZ * horiz * step;
         ny += Math.sin(bodyPitch) * fwd * step;
 
-        const hatW = decodeHatAxis(wheelPadF.axes?.[9]);
+        const hatW = wheelHat(wheelPadF);
         nx += rX * hatW.x * HAT_STRAFE_RATE * step;
         nz += rZ * hatW.x * HAT_STRAFE_RATE * step;
         // האט מעלה (y=-1) = טיפוס, למטה (y=+1) = ירידה

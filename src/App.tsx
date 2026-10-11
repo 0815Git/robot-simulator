@@ -27,6 +27,8 @@ import {
   isSolaris, isSolarisRightGrip, btnMapOf, menuNavDir,
   type ButtonMap,
 } from './controllerConfig';
+// שכבת-תאימות ההגות (G920 ⇄ VelocityOne Flight) — מיפוי הכפתורים לפי סוג ההתקן.
+import { isWheelPad, wheelMapOf, axisDeflected } from './wheelInput';
 
 // כיסוי שחור לחלונית חוזי שמוגדרת לרחפן אך הרחפן עדיין לא המריא (אין לו חוזי)
 function DroneOffCover({ slot }: { slot: 1 | 2 }) {
@@ -228,31 +230,34 @@ export default function App() {
       const pads = (navigator.getGamepads?.() || []);
       for (const p of pads) {
         if (!p) continue;
-        if (/g920|logitech|racing wheel/i.test(p.id)) continue; // הגה
+        if (isWheelPad(p)) continue;                              // הגה
         if (isPs(p)) continue;                                   // שלט PS מטופל בנפרד
         if (p.buttons[idx]?.pressed) return true;
       }
       return false;
     };
 
-    // ===== הגה Logitech G920 — מכשיר נפרד לגמרי (משמש רק את מצב ניהוג 'C') =====
-    const isWheelPad = (p: Gamepad | null) => !!p && /g920|logitech|racing wheel/i.test(p.id);
-    const whPressed = (idx: number) => {
+    // ===== ההגה (G920 / VelocityOne Flight) — מכשיר נפרד לגמרי (רק מצב ניהוג 'C') =====
+    // כל תפקיד נקרא דרך wheelMapOf, ולכן אותו קוד משרת את שתי ההגות למרות שהאינדקסים
+    // שונים לגמרי (G920: B6/B0-B3/B7 · VelocityOne: B9/B16-B19/B8).
+    const whRolePressed = (role: 'layoutMenu' | 'menuUp' | 'menuDown' | 'menuLeft' | 'menuRight' | 'paneSwitch' | 'droneLinkBtn') => {
       const pads = (navigator.getGamepads?.() || []);
       for (const p of pads) {
-        if (isWheelPad(p) && p!.buttons[idx]?.pressed) return true;
+        if (!isWheelPad(p)) continue;
+        const idx = wheelMapOf(p)[role];
+        if (typeof idx === 'number' && p!.buttons[idx]?.pressed) return true;
       }
       return false;
     };
-    const whJustPressed = (key: string, idx: number) => {
-      const now = whPressed(idx);
+    const whJustPressed = (key: string, role: Parameters<typeof whRolePressed>[0]) => {
+      const now = whRolePressed(role);
       const fired = now && !prev[key];
       prev[key] = now;
       return fired;
     };
-    // AXIS 5 של ההגה (צימוד): ערך-המנוחה נמדד בפריים הראשון, ומשם מזהים "לחיצה" כסטייה ממנו.
-    let ax5Rest: number | null = null;
-    let ax5Down = false;
+    // צימוד רובוט⇄רחפן: ב-G920 זה ציר רציף (AXIS 5) וב-VelocityOne כפתור (B2).
+    // לציר — ערך-המנוחה מכויל בקריאה הראשונה ומשם "לחיצה" היא סטייה ממנו (axisDeflected).
+    let linkDown = false;
 
     // כפתור לחוץ בשלט PS בלבד
     const psPressed = (idx: number) => {
@@ -283,7 +288,7 @@ export default function App() {
       const pads = (navigator.getGamepads?.() || []);
       for (const p of pads) {
         if (!p) continue;
-        if (/g920|logitech|racing wheel/i.test(p.id)) continue; // הגה
+        if (isWheelPad(p)) continue;                              // הגה
         if (isPs(p)) continue;                                   // שלט PS מטופל בנפרד
         const idx = btnMapOf(p)[role];
         if (idx != null && p.buttons[idx]?.pressed) return true;
@@ -412,31 +417,32 @@ export default function App() {
         }
       }
 
-      // ===== כפתורי ההגה (Logitech G920) — פעילים רק כשמצב הניהוג 'C' =====
-      // B6 = תפריט לייאאוט (פתיחה / בחירה+סגירה). כשהתפריט פתוח: B3=מעלה, B0=מטה, B1=ימינה, B2=שמאלה.
-      // כשהתפריט סגור: B7 = מעבר שליטה בין חלונית הרובוט לחלונית הרחפן, AXIS 5 = צימוד רובוט⇄רחפן.
+      // ===== כפתורי ההגה — פעילים רק כשמצב הניהוג 'C' =====
+      // התפקידים זהים בשתי ההגות; האינדקסים מגיעים מ-wheelMapOf:
+      //   G920        — layout=B6 · מעלה=B3 מטה=B0 שמאלה=B2 ימינה=B1 · חלונית=B7 · צימוד=AXIS 5
+      //   VelocityOne — layout=B9 · מעלה=B16 מטה=B18 שמאלה=B19 ימינה=B17 · חלונית=B8 · צימוד=B2
       const whActive = st.steerMode === 'C' && (navigator.getGamepads?.() || []).some(isWheelPad);
 
       if (whActive) {
-        // B6 — פותח/בוחר+סוגר את תפריט הלייאאוט
-        if (whJustPressed('whLayout', 6)) {
+        // פותח/בוחר+סוגר את תפריט הלייאאוט
+        if (whJustPressed('whLayout', 'layoutMenu')) {
           if (st.layoutMenuOpen) { st.setScreenLayout(LAYOUT_ORDER[st.layoutCursor]); st.closeLayoutMenu(); }
           else { const cur = LAYOUT_ORDER.indexOf(st.screenLayout); st.setLayoutCursor(cur < 0 ? 0 : cur); st.openLayoutMenu(); }
         }
 
         if (st.layoutMenuOpen) {
-          // תפריט פתוח: רשת 2x2 (0 1 / 2 3). B1=ימינה, B2=שמאלה, B0=מטה, B3=מעלה
+          // תפריט פתוח: רשת 2x2 (0 1 / 2 3)
           let c = st.layoutCursor;
-          if (whJustPressed('whRight', 1)) c = c % 2 === 0 ? c + 1 : c;
-          if (whJustPressed('whLeft', 2))  c = c % 2 === 1 ? c - 1 : c;
-          if (whJustPressed('whDown', 0))  c = c < 2 ? c + 2 : c;
-          if (whJustPressed('whUp', 3))    c = c >= 2 ? c - 2 : c;
+          if (whJustPressed('whRight', 'menuRight')) c = c % 2 === 0 ? c + 1 : c;
+          if (whJustPressed('whLeft', 'menuLeft'))   c = c % 2 === 1 ? c - 1 : c;
+          if (whJustPressed('whDown', 'menuDown'))   c = c < 2 ? c + 2 : c;
+          if (whJustPressed('whUp', 'menuUp'))       c = c >= 2 ? c - 2 : c;
           if (c !== st.layoutCursor) st.setLayoutCursor(c);
           // "בולעים" את התפקידים של מצב-סגור כדי שלא יזלגו ברגע הסגירה
-          prev['whPane'] = whPressed(7);
+          prev['whPane'] = whRolePressed('paneSwitch');
         } else {
-          // B7 — מעביר שליטה בין החלוניות (בדיוק כמו B1 בג'ויסטיק / ריבוע בשלט PS)
-          if (whJustPressed('whPane', 7)) {
+          // מעביר שליטה בין החלוניות (בדיוק כמו B1 בג'ויסטיק / ריבוע בשלט PS)
+          if (whJustPressed('whPane', 'paneSwitch')) {
             const layout = st.screenLayout;
             if (layout === ScreenLayout.SPLIT_VIDEO_VIDEO) st.setActivePane(st.activePane === 1 ? 2 : 1);
             else if (layout === ScreenLayout.MAP_TWO_VIDEO) st.setActivePane(st.activePane === 2 ? 3 : 2);
@@ -444,20 +450,18 @@ export default function App() {
             else if (layout === ScreenLayout.SPLIT_VIDEO_MAP) st.setVideoSlot(2, st.videoSlot2 === 'drone' ? 'robot' : 'drone');
           }
 
-          // AXIS 5 — צימוד/ניתוק רובוט⇄רחפן. הציר מדווח כערך רציף, ולכן מכיילים את ערך-המנוחה
-          // בפריים הראשון ומחשיבים "לחיצה" כסטייה משמעותית ממנו (עובד גם לציר שנח ב-0 וגם ב-±1).
+          // צימוד/ניתוק רובוט⇄רחפן — ציר ב-G920, כפתור ב-VelocityOne. שני הנתיבים
+          // מתנקזים ל-linkDown, ולכן ההחלפה נעשית ברגע המעבר ל"לחוץ" בשניהם.
           const whPad = (navigator.getGamepads?.() || []).find(isWheelPad) || null;
-          const a5 = whPad?.axes?.[5];
-          if (typeof a5 === 'number') {
-            if (ax5Rest === null) ax5Rest = a5;
-            const down = Math.abs(a5 - ax5Rest) > 0.5;
-            if (down && !ax5Down) st.toggleDroneManual();
-            ax5Down = down;
-          }
+          const down =
+            axisDeflected(whPad, wheelMapOf(whPad).droneLinkAxis) ||
+            whRolePressed('droneLinkBtn');
+          if (down && !linkDown) st.toggleDroneManual();
+          linkDown = down;
 
           // "בולעים" את כפתורי-החצים כדי שלא יזלגו ברגע פתיחת התפריט
-          prev['whRight'] = whPressed(1); prev['whLeft'] = whPressed(2);
-          prev['whDown']  = whPressed(0); prev['whUp']   = whPressed(3);
+          prev['whRight'] = whRolePressed('menuRight'); prev['whLeft'] = whRolePressed('menuLeft');
+          prev['whDown']  = whRolePressed('menuDown');  prev['whUp']   = whRolePressed('menuUp');
         }
       }
       raf = requestAnimationFrame(loop);
