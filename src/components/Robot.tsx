@@ -22,6 +22,8 @@ import {
   btnMapOf,
   isSolaris,
   sortGrips,
+  droneLinkTrigger,
+  droneLinkGateOpen,
 } from '../controllerConfig';
 export const physicalSpeeds = { left: 0, right: 0 };
 
@@ -243,12 +245,16 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       const st2 = useTelemetryStore.getState();
       const psRe2 = /dualsense|dualshock|wireless controller|054c|sony/i;
       const sticks2 = allPads.filter(p => p && !isWheelPad(p) && !psRe2.test(p.id)) as Gamepad[];
-      // צימוד/ניתוק: A10C = B2, Solaris = B27. לכל התקן האינדקס שלו דרך btnMapOf.
-      const b2Now = st2.steerMode === 'B' && sticks2.some(p => p.buttons?.[btnMapOf(p).droneLink]?.pressed);
-      if (b2Now && !prevLinkBtnRef.current) {
+      // צימוד/ניתוק. A10C: B2 לבדו. Solaris: B27 מוחזק + B25 נלחץ (B27 לבדו
+      // אינו עושה דבר, כדי שלחיצה מוטעית בודדת לא תצמד/תנתק).
+      // רגע הלחיצה נמדד על כפתור האישור בלבד, ותנאי המחזיק נבדק *באותו* רגע.
+      // לכן הסדר ההפוך (B25 ואז B27) אינו מצמד — ראה droneLinkTrigger.
+      const trigNow = st2.steerMode === 'B' && sticks2.some(droneLinkTrigger);
+      const gateNow = sticks2.some(p => droneLinkTrigger(p) && droneLinkGateOpen(p));
+      if (trigNow && !prevLinkBtnRef.current && gateNow) {
         st2.toggleDroneManual();
       }
-      prevLinkBtnRef.current = b2Now;
+      prevLinkBtnRef.current = trigNow;
     }
 
     // כשהשליטה עברה לרחפן — הרובוט "חונה" במקום ואינו מגיב לפקדים

@@ -24,7 +24,7 @@ import { VideoLink, VideoFeedTap } from './components/VideoLink';
 import { useTelemetryStore, ViewMode, ScreenLayout } from './store';
 // שכבת-תאימות הג'ויסטיקים (A10C ⇄ Solaris) — מיפוי כפתורים גלובליים + ניווט בתפריט.
 import {
-  isSolaris, isSolarisRightGrip, btnMapOf, menuNavDir,
+  isSolaris, isSolarisRightGrip, btnMapOf, menuNavDir, paneSwitchSuppressed,
   type ButtonMap,
 } from './controllerConfig';
 // שכבת-תאימות ההגות (G920 ⇄ VelocityOne Flight) — מיפוי הכפתורים לפי סוג ההתקן.
@@ -307,7 +307,15 @@ export default function App() {
 
       // --- מעבר שליטה/החלפת תוכן: A10C=B1, Solaris=B25 ---
       // פריסות עם 2 חוזי → מעביר שליטה; פריסות עם חוזי אחד → מחליף את תוכן החלונית
-      if (logicalJustPressed('b1', 'paneSwitch')) {
+      //
+      // ב-Solaris אותו כפתור (B25) הוא גם האישור לצימוד רובוט⇄רחפן, ולכן כשכפתור
+      // הצימוד (B27) מוחזק הלחיצה שייכת לצימוד בלבד והמעבר מושתק. מושתק רק במצב
+      // ב' — אותו מצב שבו הצימוד עצמו פעיל — כדי שבשאר המצבים B25 תמיד יעביר.
+      // logicalJustPressed נקרא תמיד, גם כשמשתיקים, כדי שה-prev יתעדכן ולא
+      // "ייזלג" מעבר בפריים הבא.
+      const paneBlocked = st.steerMode === 'B' &&
+        (navigator.getGamepads?.() || []).some(paneSwitchSuppressed);
+      if (logicalJustPressed('b1', 'paneSwitch') && !paneBlocked) {
         const layout = st.screenLayout;
         if (layout === ScreenLayout.SPLIT_VIDEO_VIDEO) {
           // חצי-חצי חוזי: מעבירים שליטה בין 1 ל-2

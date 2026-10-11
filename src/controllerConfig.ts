@@ -53,6 +53,14 @@ export interface ButtonMap {
   pov: number;          // מחזור POV
   layoutMenu: number;   // פתיחת/בחירת תפריט פריסה
   droneLink: number;    // צימוד/ניתוק רובוט⇄רחפן
+  /**
+   * כפתור *אישור* לצימוד: חייב להילחץ בעוד droneLink מוחזק.
+   * null = אין אישור, ולחיצה על droneLink לבדה מצמדת (ההתנהגות ב-A10C).
+   * ב-Solaris כפתור הצימוד נלחץ בטעות, ולכן הוא הפך ל"מחזיק" ולבדו אינו
+   * עושה דבר. שים לב שכפתור האישור שם הוא *גם* כפתור מעבר החלוניות, ולכן
+   * המעבר מושתק בזמן שהוא משמש לאישור — ראה paneSwitchSuppressed.
+   */
+  droneLinkConfirm: number | null;
   invertY: number;      // היפוך ציר Y של הצלב
 }
 
@@ -62,6 +70,7 @@ export const A10C_BTN: ButtonMap = {
   pov: 3,
   layoutMenu: 4,
   droneLink: 2,
+  droneLinkConfirm: null,   // B2 לבדו מצמד, כמו שהיה תמיד
   invertY: 2,
 };
 
@@ -75,6 +84,7 @@ export const SOLARIS_BTN: ButtonMap = {
   pov: 16,
   layoutMenu: 15,
   droneLink: 27,
+  droneLinkConfirm: 25,     // B27 מוחזק + B25 נלחץ = צימוד. B27 לבדו: כלום.
   invertY: SOLARIS_INVERT_Y_BTN,
 };
 
@@ -171,4 +181,35 @@ export const menuNavDir = (p: Gamepad | null): { x: number; y: number } => {
     x: Math.abs(ax) > 0.5 ? Math.sign(ax) : 0,
     y: Math.abs(ay) > 0.5 ? Math.sign(ay) : 0,
   };
+};
+
+// ---- צימוד רובוט⇄רחפן ----
+// A10C: כפתור בודד. Solaris: שילוב — droneLink (B27) מוחזק *ואז* droneLinkConfirm
+// (B25) נלחץ. הפעלה נמדדת על *רגע הלחיצה של כפתור האישור בלבד*, ולכן לחיצה
+// בסדר הפוך (B25 ואז B27) אינה מצמדת — אחרת היא הייתה גם מחליפה חלונית וגם
+// מצמדת באותה תנועה.
+
+/** הכפתור שלחיצתו מפעילה את הצימוד — זה שצריך לזהות עליו את רגע הלחיצה. */
+export const droneLinkTrigger = (p: Gamepad | null): boolean => {
+  if (!p) return false;
+  const m = btnMapOf(p);
+  return p.buttons?.[m.droneLinkConfirm ?? m.droneLink]?.pressed || false;
+};
+
+/** האם שאר תנאי הצימוד מתקיימים באותו רגע (המחזיק לחוץ, או שאין מחזיק). */
+export const droneLinkGateOpen = (p: Gamepad | null): boolean => {
+  if (!p) return false;
+  const m = btnMapOf(p);
+  if (m.droneLinkConfirm === null) return true;
+  return p.buttons?.[m.droneLink]?.pressed || false;
+};
+
+/**
+ * האם מעבר החלוניות מושתק כרגע, כי הכפתור שלו משמש כאישור לצימוד.
+ * רלוונטי רק להתקן שבו שני התפקידים יושבים על אותו כפתור (Solaris).
+ */
+export const paneSwitchSuppressed = (p: Gamepad | null): boolean => {
+  if (!p) return false;
+  const m = btnMapOf(p);
+  return m.droneLinkConfirm !== null && (p.buttons?.[m.droneLink]?.pressed || false);
 };
