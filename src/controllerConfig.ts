@@ -61,7 +61,6 @@ export interface ButtonMap {
    * המעבר מושתק בזמן שהוא משמש לאישור — ראה paneSwitchSuppressed.
    */
   droneLinkConfirm: number | null;
-  invertY: number;      // היפוך ציר Y של הצלב
   /**
    * נטרול המטרה (התאדות הדמות) — מקביל למקש F במקלדת.
    * null = אין כפתור כזה בהתקן הזה. הטווח מהדמות, החד-פעמיות וזיהוי רגע
@@ -78,13 +77,8 @@ export const A10C_BTN: ButtonMap = {
   layoutMenu: 4,
   droneLink: 2,
   droneLinkConfirm: null,   // B2 לבדו מצמד, כמו שהיה תמיד
-  invertY: 2,
   dissolveBtn: null,        // טרם נבחר כפתור בהתקן הזה
 };
-
-// TODO(SOLARIS_INVERT_Y): כפתור היפוך-Y טרם נבחר ע"י המשתמש. 14 הוא ברירת-מחדל
-// זמנית — יש להחליף לאינדקס שהמשתמש ילחץ ב-solaris-mapper. (B15 שמור לתפריט פריסה.)
-export const SOLARIS_INVERT_Y_BTN = 14;
 
 export const SOLARIS_BTN: ButtonMap = {
   trigger: 23,
@@ -93,7 +87,6 @@ export const SOLARIS_BTN: ButtonMap = {
   layoutMenu: 15,
   droneLink: 27,
   droneLinkConfirm: 25,     // B27 מוחזק + B25 נלחץ = צימוד. B27 לבדו: כלום.
-  invertY: SOLARIS_INVERT_Y_BTN,
   dissolveBtn: 17,          // נטרול המטרה — כמו מקש F
 };
 

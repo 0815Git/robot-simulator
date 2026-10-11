@@ -19,8 +19,6 @@ import {
   fineDriveDir,
   coarseDriveDir,
   cameraPanX,
-  btnMapOf,
-  isSolaris,
   sortGrips,
   droneLinkTrigger,
   droneLinkGateOpen,
@@ -31,8 +29,6 @@ export const physicalSpeeds = { left: 0, right: 0 };
 // Shared global refs for gamepad controls and camera direction to sync between components
 const modeRef = { current: 'A' as 'A' | 'B' | 'C' };
 const prevB3Ref = { current: false };
-const aimInvertYRef = { current: false };   // האם ציר ה-Y של הצלב הפוך (החלפה בכפתור ריבוע)
-const prevSquareRef = { current: false };   // מצב כפתור ריבוע בפריים הקודם — לזיהוי רגע הלחיצה
 const cameraYawRef = { current: 0 };
 const cameraPitchRef = { current: 0 };
 const aimTargetYawRef = { current: 0 };
@@ -321,21 +317,6 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
     // B3 עבר לשמש את מחזור ה-POV (ב-App.tsx). כאן הוא כבר לא מחליף מצב ניהוג.
     const b3Pressed = btnsRight?.[3]?.pressed || false;
     prevB3Ref.current = b3Pressed;
-    // היפוך כיוון ציר ה-Y של הצלב.
-    //   • שלט PS יחיד: כפתור ריבוע (2), רק כשאין ג'ויסטיקים גדולים מחוברים.
-    //   • Solaris: כפתור ייעודי (btnMapOf.invertY) בכל אחד מהגריפים.
-    // סופרים רק את רגע הלחיצה (ראו prevSquareRef למטה).
-    const solarisSticks = isSolaris(gpLeft) || isSolaris(gpRight);
-    const squarePressed = solarisSticks
-      ? ((gpLeft?.buttons?.[btnMapOf(gpLeft).invertY]?.pressed) ||
-         (gpRight?.buttons?.[btnMapOf(gpRight).invertY]?.pressed) || false)
-      : (!axesRight && (gpLeft?.buttons?.[2]?.pressed || false));
-    if (squarePressed && !prevSquareRef.current) {
-      aimInvertYRef.current = !aimInvertYRef.current;
-      console.log("Aim Y-axis inverted:", aimInvertYRef.current);
-    }
-    prevSquareRef.current = squarePressed;
-
     // כשתפריט הלייאאוט פתוח — B10-13 שייכים לדפדוף בתפריט, אז הרובוט מתעלם מהם לגמרי
     const layoutMenuOpen = useTelemetryStore.getState().layoutMenuOpen;
 
@@ -413,8 +394,9 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       const rightX = axesRight ? axesRight[0] : (axesLeft?.[2] ?? 0);
       const rightY = axesRight ? axesRight[1] : (axesLeft?.[3] ?? 0);
       const stickX = Math.abs(rightX) > deadzone ? rightX : 0;
-      // אם ההיפוך פעיל (כפתור ריבוע), הופכים את סימן הציר האנכי של הצלב.
-      const stickY = (Math.abs(rightY) > deadzone ? rightY : 0) * (aimInvertYRef.current ? -1 : 1);
+      // כיוון הצלב קבוע: דחיפה קדימה = הצלב יורד, משיכה = הצלב עולה.
+      // אין אפשרות להפוך אותו — ההתנהגות אחידה לכל הנבדקים.
+      const stickY = Math.abs(rightY) > deadzone ? rightY : 0;
       const touchingStick = stickX !== 0 || stickY !== 0;
 
       if (triggerPressed) {
