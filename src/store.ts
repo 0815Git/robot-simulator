@@ -56,6 +56,9 @@ export interface SessionRecord {
   lap1Time: string;
   lap2Time: string;
   narrowExitTime: string;
+  // נסיעה בתוך המבנה — נמדד רק במסלול המקוצר, שבו דילגנו על הסיבובים.
+  // 'N/A' כשהסשן רץ במסלול המלא (ואז lap1Time/narrowExitTime הם שמחזיקים את הזמן).
+  bldgDriveTime: string;
   droneTime: string;   // זמן מקטע הרחפן (מ-sensor-2 עד sensor-5 אחרי סיום ריצת הרובוט). 'N/A' עד שיימדד.
 }
 
@@ -231,6 +234,11 @@ interface TelemetryState {
   lap2End: number | null;
   narrowExitStart: number | null;
   narrowExitEnd: number | null;
+  // --- מסלול מקוצר: נסיעה בתוך המבנה במקום הסיבובים ---
+  // נפתח בשטיח הכניסה הפנימי (sensor-bldg-inside) ונסגר בשטיח הסיום (sensor-5),
+  // אבל *רק* אם לא הושלם סיבוב בדרך. במסלול המלא הוא נשאר פתוח ואינו נרשם.
+  bldgDriveStart: number | null;
+  bldgDriveEnd: number | null;
   // --- מקטע הרחפן: נמדד רק אחרי שריצת הרובוט הסתיימה (expEnd קיים) ---
   droneSegStart: number | null;
   droneSegEnd: number | null;
@@ -297,6 +305,7 @@ const blankTimers = {
   narrowStart: null, narrowEnd: null,
   lap1Start: null, lap1End: null, lap2Start: null, lap2End: null,
   narrowExitStart: null, narrowExitEnd: null,
+  bldgDriveStart: null, bldgDriveEnd: null,
   droneSegStart: null, droneSegEnd: null,
   alley1Start: null, alley1End: null,
   alley2Start: null, alley2End: null,
@@ -704,6 +713,10 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       get()._pushSegment('פתח צר - יציאה (חלקי)', s.narrowExitStart, now, null);
     } else if (s.lap1Start && !s.lap1End) {
       get()._pushSegment('סיבוב (חלקי)', s.lap1Start, now, null);
+    } else if (s.bldgDriveStart && !s.bldgDriveEnd) {
+      // נכנסנו למבנה ועוד לא יצאנו, ובלי שנפתח סיבוב — כלומר במסלול המקוצר.
+      // בלי הענף הזה הזמן שבתוך המבנה היה נעלם מסשן שנקטע באמצע.
+      get()._pushSegment('נסיעה בבניין (חלקי)', s.bldgDriveStart, now, get().eCountLaps);
     } else if (s.narrowStart && !s.narrowEnd) {
       get()._pushSegment('פתח צר - כניסה (חלקי)', s.narrowStart, now, get().eCountNarrow);
     } else if (s.alley1Start && !s.alley1End) {
@@ -757,6 +770,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       lap1Time: calc(s.lap1Start, s.lap1End),
       lap2Time: calc(s.lap2Start, s.lap2End),
       narrowExitTime: calc(s.narrowExitStart, s.narrowExitEnd),
+      bldgDriveTime: calc(s.bldgDriveStart, s.bldgDriveEnd),
       droneTime: 'N/A',   // ייקבע מאוחר יותר אם/כאשר מקטע הרחפן יימדד (triggerDroneEnd)
     };
 
@@ -776,6 +790,9 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   lap2End: null,
   narrowExitStart: null,
   narrowExitEnd: null,
+
+  bldgDriveStart: null,
+  bldgDriveEnd: null,
 
   droneSegStart: null,
   droneSegEnd: null,
@@ -896,7 +913,10 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
     if (get().narrowStart && !get().narrowEnd) {
       const now = Date.now();
       console.log("Narrow (Entry) Ended");
-      set({ narrowEnd: now });
+      // כאן גם *נפתחת* מדידת "נסיעה בבניין" — שעון שרץ במקביל מרגע הכניסה למבנה.
+      // במסלול המלא הוא פשוט לא נסגר ולא נרשם, כי הסיבוב ופתח-היציאה מכסים את הזמן.
+      // במסלול המקוצר (דילוג על הסיבובים) הוא זה שנרשם, ב-triggerSensor5.
+      set({ narrowEnd: now, bldgDriveStart: now });
       get()._pushSegment('פתח צר - כניסה', get().narrowStart, now, get().eCountNarrow);
     }
   },
@@ -927,12 +947,38 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   // שטיח אחרון: עוצר את "פתח צר - יציאה", מסיים את הניסוי כולו,
   // רושם מקטע "סך הכל" (רק זמן כולל, שאר העמודות ריקות),
   // שומר שורת סשן בזיכרון ומדליק את כפתור "Next".
+  //
+  // שני מסלולים אפשריים:
+  //   מלא    — כניסה → סיבוב (sensor-4 פעמיים) → פתח צר יציאה → שטיח סיום.
+  //   מקוצר  — כניסה → ישר לשטיח הסיום. קורה כשמחוסר זמן מדלגים על הסיבוב בתוך
+  //            המבנה. במקרה הזה נרשם מקטע אחד, "נסיעה בבניין", מרגע הכניסה למבנה
+  //            ועד היציאה ממנו — במקום "סיבוב" ו"פתח צר - יציאה".
   triggerSensor5: () => {
     if (get().expStart && !get().expEnd && !get().narrowExitEnd) {
       const now = Date.now();
       const start = get().expStart;
-      set({ narrowExitEnd: now, expEnd: now });
-      get()._pushSegment('פתח צר - יציאה', get().narrowExitStart, now, null);
+      const s0 = get();
+
+      // "דילגנו על הסיבובים" = נכנסנו למבנה אבל אף סיבוב לא נסגר (sensor-4 לא נדרך
+      // פעמיים). זה מזהה גם דילוג מלא וגם כניסה חלקית לאזור הסיבוב ויציאה ממנו.
+      const lapsSkipped = !!s0.bldgDriveStart && !s0.lap1End;
+
+      if (lapsSkipped) {
+        console.log("Laps skipped — recording in-building drive instead");
+        set({
+          bldgDriveEnd: now, narrowExitEnd: now, expEnd: now,
+          // מנטרלים סיבוב שנפתח ולא נסגר, כדי שלא ייווצר אחר כך "סיבוב (חלקי)"
+          // שסופר שוב את אותן שניות שנרשמו כבר ב"נסיעה בבניין".
+          lap1Start: null, corridor2TouchCount: 2, lastCorridor2Touch: now,
+        });
+        // לחיצות ה-E שקרו מרגע הכניסה למבנה נצברות ב-eCountLaps (ראה recordEPress),
+        // ולכן זה מספר ההתהפכויות של המקטע הזה.
+        get()._pushSegment('נסיעה בבניין', s0.bldgDriveStart, now, get().eCountLaps);
+      } else {
+        // מסלול מלא — ההתנהגות שהייתה תמיד.
+        set({ narrowExitEnd: now, expEnd: now });
+        get()._pushSegment('פתח צר - יציאה', get().narrowExitStart, now, null);
+      }
 
       // שורת סיכום: רק הזמן הכולל מההתחלה ועד הסוף. כל שאר העמודות ריקות.
       const s = get();

@@ -10,13 +10,20 @@
 // ה-Solaris נחשף כ-*שני התקנים* נפרדים (כמו ה-A10C). אומת חי מול ההתקן:
 //   • גריף שמאל  = Vendor 044f / Product 0422
 //   • גריף ימין  = Vendor 044f / Product 042a
-// שניהם מכילים "Solaris" ב-id, ולכן isSolaris() מזהה את שניהם.
 
 import { decodeHatAxis } from './wheelInput';
 
 // ---- זיהוי משפחת ההתקן ----
+// מזהים גם לפי השם וגם לפי צמד ה-vendor/product, כי דפדפנים שונים מרכיבים את ה-id
+// אחרת: לעתים "Thrustmaster Solaris (Vendor: 044f Product: 042a)" ולעתים רק
+// "044f-042a-..." בלי שם קריא. זיהוי לפי השם בלבד נכשל בשקט במקרה השני — ואז
+// btnMapOf מחזיר את מפת ה-A10C, ו-menuNavDir/fineDriveDir/cameraPanX לוקחים את
+// הענף הלא נכון, כך שרוב הפקדים פשוט לא עושים כלום.
+//
+// חשוב: Vendor 044f הוא Thrustmaster וחולק גם עם ה-A10C, ולכן *חייבים* לדרוש גם
+// את ה-product id של אחד הגריפים ולא את ה-vendor לבדו.
 export const isSolaris = (p: Gamepad | null): boolean =>
-  !!p && /solaris/i.test(p.id);
+  !!p && (/solaris/i.test(p.id) || (/044f/i.test(p.id) && /042(2|a)/i.test(p.id)));
 
 // זיהוי צד הגריף ב-Solaris לפי ה-product id (אומת חי: 0422=שמאל, 042a=ימין)
 export const isSolarisLeftGrip  = (p: Gamepad | null): boolean => !!p && /0422/i.test(p.id);
