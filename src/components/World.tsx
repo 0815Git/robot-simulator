@@ -959,7 +959,11 @@ export function World({ visualsOnly = false, practice = false, showHillOverlay =
   return (
     <>
       <Sky sunPosition={[100, 20, 100]} />
-      <Environment preset="sunset" />
+      {/* תאורת הסביבה. preset="sunset" של drei מוריד את הקובץ הזה מ-raw.githack.com
+          בכל טעינה, וכשאין אינטרנט הטעינה נכשלת, useLoader זורק, ואין ErrorBoundary
+          שיתפוס — כל האפליקציה נופלת למסך לבן. לכן הקובץ יושב ב-public/ ונטען מקומית.
+          זה אותו קובץ בדיוק (venice_sunset_1k.hdr), ולכן המראה לא משתנה. */}
+      <Environment files={`${import.meta.env.BASE_URL}venice_sunset_1k.hdr`} />
       <ambientLight intensity={0.3} />
       <directionalLight castShadow position={[10, 20, 10]} intensity={1.5} shadow-bias={-0.0005} shadow-mapSize={[2048, 2048]} shadow-camera-left={-250} shadow-camera-right={250} shadow-camera-top={250} shadow-camera-bottom={-250} />
       
