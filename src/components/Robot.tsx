@@ -9,7 +9,7 @@ import { getGamepadAxes } from '../hooks/useGamepads';
 import { useTelemetryStore, ViewMode, ROCKET_MAN_POS, TARGET_RANGE_M } from '../store';
 // מיפוי ההגות (G920 / VelocityOne Flight) יושב ב-src/wheelInput.ts — מקור-אמת יחיד
 // לרובוט ולרחפן, ומתרגם כל תפקיד לפי סוג ההתקן.
-import { readWheelDrive, isWheelPad, wheelLaunchActive, wheelLaunchSharesHat } from '../wheelInput';
+import { readWheelDrive, isWheelPad, wheelLaunchActive, wheelLaunchHoldsAfterTakeoff } from '../wheelInput';
 import { PS_CAM_MOD_HELD } from './Drone';
 import { physicsEnv } from '../physicsEnv';
 // שכבת-תאימות הג'ויסטיקים (A10C ⇄ Solaris). לא נוגעת בצירים 0/1.
@@ -194,7 +194,7 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       const wheelPadL = allPads.find(isWheelPad) || null;
       const whLaunch = st.steerMode === 'C' && !st.layoutMenuOpen
         && wheelLaunchActive(wheelPadL)
-        && !(wheelLaunchSharesHat(wheelPadL) && st.droneLaunched)
+        && (wheelLaunchHoldsAfterTakeoff(wheelPadL) || !st.droneLaunched)
         // ברגע שהרחפן באוויר, המשך ההרמה מהמצעד שייך לשליטה על *הרובוט* בלבד:
         // כששולטים על הרחפן אותה דחיפה היא הגז קדימה שלו (readWheelFlight), ובלי
         // התנאי הזה היא גם הייתה מרימה אותו בגובה באותו פריים.

@@ -445,13 +445,11 @@ export function DroneControls() {
 
         // ===== פקדי הטיסה — הסעה, סיבוב והטיית אף =====
         // readWheelFlight בוחר את הפקדים לפי סוג ההגה (G920: דוושות+הגה+B4/B5 ·
-        // VelocityOne: AXIS 6 מסיע, ההגה מסובבת, AXIS 1 הוא האף). הקצבים כאן זהים
+        // VelocityOne: המצעד מסיע, ההגה מסובבת, AXIS 1 הוא האף). הקצבים כאן זהים
         // לשאר הכלים, ולכן התחושה אחידה בכל אופני הניהוג.
         const wf = readWheelFlight(wheelPadF);
 
-        // הטיית האף. הזווית נשמרת עד שמחזירים אותה ידנית — אין התיישרות אוטומטית
-        // לאופק כמו בשלט ה-PS, כי כאן האף הוא פקד *עמדה* (כפתור מוחזק או ציר),
-        // והתיישרות אוטומטית הייתה נלחמת בכיוון שהמשתמשת מחזיקה עכשיו.
+        // הטיית האף. הזווית נשמרת עד שמחזירים אותה ידנית.
         const NOSE_RATE = 1.2;                // rad/s — זהה לשלט ה-PS
         bodyPitch += wf.noseRate * NOSE_RATE * delta;
         bodyPitch = Math.max(-NOSE_MAX_ANGLE, Math.min(NOSE_MAX_ANGLE, bodyPitch));

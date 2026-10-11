@@ -12,24 +12,21 @@
 
 import { useTelemetryStore } from './store';
 
-// ---- זיהוי משפחת ההגה ----
-// G920: ה-id מכיל g920 / logitech / racing wheel.
-export const isG920 = (p: Gamepad | null): boolean =>
-  !!p && /g920|logitech|racing wheel/i.test(p.id);
+// ---- רישום ההגות ----
+// כל הגה מוגדרת פעם אחת, במלואה, ברשומה אחת. *כל* הבדל בין ההגות מוצהר שם
+// במפורש — גם מאיפה כל פעולה מגיעה וגם איך היא מתנהגת — ולא נגזר מ"האם השדה
+// הזה null". לכן אפשר לשנות התנהגות של הגה אחת בלי לגעת בשנייה ובלי לקרוא
+// את הלוגיקה בכלל, ואפשר להוסיף הגה שלישית בהוספת רשומה ל-WHEELS.
 
-// VelocityOne Flight: אומת ב-gamepad tester — Vendor 10f5 / Product 7004.
-// מזהים גם לפי השם וגם לפי צמד ה-vendor/product, כי דפדפנים שונים מרכיבים את ה-id
-// אחרת (לעתים רק "10f5-7004-..." בלי שם קריא).
-export const isVelocityOne = (p: Gamepad | null): boolean =>
-  !!p && (/velocity\s*one/i.test(p.id) || (/10f5/i.test(p.id) && /7004/i.test(p.id)));
+/** מאיפה מגיעה נהיגת הרובוט. */
+export type DriveSource = 'pedals' | 'axis';
+/** מאיפה מגיעה המראת הרחפן. */
+export type LaunchSource = 'hat' | 'throttle';
+/** מאיפה מגיעה הטיית אף הרחפן. */
+export type NoseSource = 'buttons' | 'axis' | 'none';
+/** מאיפה מגיעה הסעת הרחפן קדימה/אחורה. */
+export type ThrustSource = 'pedals' | 'axis';
 
-// זיהוי ההגה (כל סוג) — כדי לבודד אותה מהג'ויסטיקים ומשלט ה-PS
-export const isWheelPad = (p: Gamepad | null) => isG920(p) || isVelocityOne(p);
-
-// ---- כיוון הצירים של VelocityOne ----
-// הנחה: דחיפת ההגה קדימה נותנת ערך *שלילי* (כמו ציר Y של סטיק). אם יתברר הפוך
-// במכשיר — להפוך את הסימן כאן בלבד: גם נהיגת הרובוט וגם הטיית אף הרחפן מתהפכות
-// איתו יחד, כי שתיהן נגזרות מאותו ציר (AXIS 1) ומאותו קבוע.
 export const VELOCITY_ONE_DRIVE_SIGN = -1;
 
 // גז הרחפן (AXIS 2) — פקד נפרד מההגה, ולכן סימן נפרד שאפשר להפוך לבד.
@@ -77,19 +74,44 @@ export function wheelCal(): WheelCal {
 
 // ---- מפת פקדים לוגית לכל משפחת הגה ----
 // null = הפעולה אינה קיימת בהגה הזו. כל צרכן מתעלם ממנה בשקט.
-export interface WheelMap {
-  // --- צירים ---
-  steerAxis: number;            // סיבוב ההגה שמאלה/ימינה
-  driveAxis: number | null;     // ציר נהיגה דו-כיווני (דחיפה/משיכה) — VelocityOne
-  gasAxis: number | null;       // דוושת גז — G920
-  reverseAxis: number | null;   // דוושת רוורס — G920
-  hatAxis: number;              // ה-HAT: גובה הרחפן (y) + הליכה סרטנית (x)
-  launchAxis: number | null;    // ציר המראת הרחפן — VelocityOne
-  droneLinkAxis: number | null; // ציר צימוד רובוט⇄רחפן — G920
-  noseAxis: number | null;      // ציר הטיית אף הרחפן — VelocityOne (דחיפה=מטה, משיכה=מעלה)
-  thrustAxis: number | null;    // ציר הסעת הרחפן קדימה/אחורה — VelocityOne
+export interface WheelSpec {
+  /** שם קריא, לשגיאות ולדיבוג. */
+  label: string;
+  /** זיהוי ההתקן לפי ה-id שהדפדפן מדווח. */
+  matches: (id: string) => boolean;
 
-  // --- כפתורים ---
+  // ===== מאיפה כל פעולה מגיעה =====
+  driveSource: DriveSource;    // נהיגת הרובוט
+  thrustSource: ThrustSource;  // הסעת הרחפן
+  launchSource: LaunchSource;  // המראת הרחפן
+  noseSource: NoseSource;      // הטיית אף הרחפן
+
+  // ===== התנהגות =====
+  /**
+   * האם ההמראה ממשיכה להרים את הרחפן גם אחרי שהוא באוויר.
+   * false נדרש כשפקד ההמראה הוא *אותו* פקד ששולט בגובה (ה-HAT), אחרת אותה
+   * דחיפה נספרת פעמיים באותו פריים — גם המראה וגם טיפוס.
+   */
+  launchHoldsAfterTakeoff: boolean;
+  /**
+   * האם אף הרחפן חוזר לאופק מעצמו כשמשחררים.
+   * מתאים לפקד *רגעי* (כפתורים). בפקד-עמדה (ציר שמוחזק) התיישרות אוטומטית
+   * נלחמת בכיוון שהמשתמש מחזיק כרגע, ולכן שם היא כבויה.
+   */
+  noseAutoLevel: boolean;
+
+  // ===== צירים =====
+  steerAxis: number;            // סיבוב ההגה שמאלה/ימינה
+  driveAxis: number | null;     // ציר נהיגה דו-כיווני — כש-driveSource='axis'
+  gasAxis: number | null;       // דוושת גז — כש-driveSource='pedals'
+  reverseAxis: number | null;   // דוושת רוורס — כש-driveSource='pedals'
+  hatAxis: number;              // ה-HAT: גובה הרחפן (y) + הליכה סרטנית (x)
+  thrustAxis: number | null;    // ציר הסעת הרחפן — כש-thrustSource='axis'
+  noseAxis: number | null;      // ציר הטיית האף — כש-noseSource='axis'
+  launchAxis: number | null;    // ציר ההמראה — כש-launchSource='throttle'
+  droneLinkAxis: number | null; // ציר צימוד רובוט⇄רחפן
+
+  // ===== כפתורים =====
   gasBtn: number | null;        // גז בינארי (חלופה לדוושה)
   reverseBtn: number | null;    // רוורס בינארי
   layoutMenu: number;           // פתיחת תפריט הפריסה / בחירה+סגירה
@@ -98,21 +120,43 @@ export interface WheelMap {
   menuLeft: number;
   menuRight: number;
   paneSwitch: number;           // מעבר שליטה בין החלוניות
-  droneLinkBtn: number | null;  // כפתור צימוד רובוט⇄רחפן — VelocityOne
-  noseUp: number | null;        // הרמת אף הרחפן
-  noseDown: number | null;      // הורדת אף הרחפן
+  droneLinkBtn: number | null;  // כפתור צימוד רובוט⇄רחפן
+  noseUp: number | null;        // הרמת אף — כש-noseSource='buttons'
+  noseDown: number | null;      // הורדת אף — כש-noseSource='buttons'
 }
 
-export const G920_WHEEL: WheelMap = {
+/** שם לשעבר, לתאימות לאחור. */
+export type WheelMap = WheelSpec;
+
+// ===================== Logitech G920 =====================
+// הגת מירוצים עם שתי דוושות. ה-HAT עושה שלושה דברים: המראה, גובה והליכה סרטנית.
+export const G920_WHEEL: WheelSpec = {
+  label: 'Logitech G920',
+  matches: (id) => /g920|logitech|racing wheel/i.test(id),
+
+  driveSource: 'pedals',        // גז ורוורס, שני צירים חד-כיווניים
+  thrustSource: 'pedals',       // הרחפן מוסע מאותו מיקס דיפרנציאלי של הזחלים
+  launchSource: 'hat',          // ה-HAT מעלה
+  noseSource: 'buttons',        // B4 / B5
+
+  // ההמראה *היא* ה-HAT, וה-HAT גם שולט בגובה — ולכן היא נעצרת ברגע ההמראה
+  // והטיפוס עובר ל-Drone.tsx, אחרת אותה דחיפה נספרת פעמיים.
+  launchHoldsAfterTakeoff: false,
+  // TODO(G920_NOSE_LEVEL): פקד האף כאן הוא כפתורים רגעיים, בדיוק כמו בשלט ה-PS
+  // שבו האף כן מתיישר לאופק. ההתנהגות הנוכחית (זווית נשמרת) היא מה שהיה תמיד,
+  // והמשתמש טרם החליט אם להתיישר וכיצד. להפעלה: true, בלי לגעת בשום דבר אחר.
+  noseAutoLevel: false,
+
   steerAxis: WHEEL_AXIS,
-  driveAxis: null,              // ב-G920 הנהיגה מגיעה משתי הדוושות
+  driveAxis: null,
   gasAxis: GAS_AXIS,
   reverseAxis: REVERSE_AXIS,
   hatAxis: 9,
-  launchAxis: null,             // ההמראה היא ה-HAT מעלה
+  thrustAxis: null,
+  noseAxis: null,
+  launchAxis: null,
   droneLinkAxis: 5,
-  noseAxis: null,               // האף ב-G920 הוא כפתורים (B4/B5), לא ציר
-  thrustAxis: null,             // ההסעה ב-G920 היא הדוושות, כמו ברובוט
+
   gasBtn: GAS_BTN,
   reverseBtn: REVERSE_BTN,
   layoutMenu: 6,
@@ -121,23 +165,43 @@ export const G920_WHEEL: WheelMap = {
   menuLeft: 2,
   menuRight: 1,
   paneSwitch: 7,
-  droneLinkBtn: null,           // ב-G920 הצימוד הוא ציר (AXIS 5)
+  droneLinkBtn: null,
   noseUp: 4,
   noseDown: 5,
 };
 
-// הערה: האף ב-VelocityOne הוא *ציר* (AXIS 1) ולא כפתורים, ולכן noseUp/noseDown
-// נשארים null וההטיה מגיעה דרך noseAxis ב-readWheelFlight.
-export const VELOCITY_ONE_WHEEL: WheelMap = {
-  steerAxis: 0,                 // ימינה/שמאלה של ההגה
-  driveAxis: 1,                 // דחיפה/משיכה של ההגה = קדימה/אחורה
+// ================= Turtle Beach VelocityOne Flight =================
+// הגת טיסה: אין דוושות. AXIS 1 מנהג את הרובוט או מטה את אף הרחפן (לפי מי
+// שמנוהג — שני הנתיבים אינם רצים יחד), ו-AXIS 2 הוא מצעד שממריא על הקרקע
+// ונותן גז באוויר. אומת ב-gamepad tester: Vendor 10f5 / Product 7004.
+export const VELOCITY_ONE_WHEEL: WheelSpec = {
+  label: 'VelocityOne Flight',
+  // גם לפי השם וגם לפי vendor+product, כי דפדפנים מרכיבים את ה-id אחרת
+  // ולעתים אין בו שם קריא כלל.
+  matches: (id) => /velocity\s*one/i.test(id) || (/10f5/i.test(id) && /7004/i.test(id)),
+
+  driveSource: 'axis',          // AXIS 1, דחיפה/משיכה
+  thrustSource: 'axis',         // AXIS 2, המצעד
+  launchSource: 'throttle',     // אותו מצעד, על הקרקע
+  noseSource: 'axis',           // AXIS 1, כששולטים ברחפן
+
+  // ההמראה היא ציר נפרד מה-HAT, ולכן אין התנגשות: מרימה כל עוד מחזיקים,
+  // עד תקרת ההמראה — בדיוק כמו בשאר אופני הניהוג.
+  launchHoldsAfterTakeoff: true,
+  // האף כאן הוא פקד-עמדה (ציר מוחזק). התיישרות אוטומטית הייתה נלחמת בכיוון
+  // שהמשתמש דוחף כרגע, ולכן היא כבויה — וזה לא אמור להשתנות.
+  noseAutoLevel: false,
+
+  steerAxis: 0,
+  driveAxis: 1,
   gasAxis: null,
   reverseAxis: null,
-  hatAxis: 9,                   // גובה הרחפן + הליכה סרטנית — בדיוק כמו ב-G920
-  launchAxis: 2,                // העלאת הרחפן לאוויר (אותו מצעד שהוא גם גז הרחפן)
+  hatAxis: 9,                   // גובה + הליכה סרטנית, כמו ב-G920
+  thrustAxis: 2,
+  noseAxis: 1,
+  launchAxis: 2,
   droneLinkAxis: null,
-  noseAxis: 1,                  // *אותו* ציר של נהיגת הרובוט — ראה readWheelFlight
-  thrustAxis: 2,                // גז הרחפן — *אותו* מצעד של ההמראה, ראה readWheelFlight
+
   gasBtn: null,
   reverseBtn: null,
   layoutMenu: 9,
@@ -146,13 +210,30 @@ export const VELOCITY_ONE_WHEEL: WheelMap = {
   menuLeft: 19,
   menuRight: 17,
   paneSwitch: 8,
-  droneLinkBtn: 2,              // צימוד רובוט⇄רחפן
+  droneLinkBtn: 2,
   noseUp: null,
   noseDown: null,
 };
 
-export const wheelMapOf = (p: Gamepad | null): WheelMap =>
-  isVelocityOne(p) ? VELOCITY_ONE_WHEEL : G920_WHEEL;
+// כל ההגות המוכרות. להוספת הגה — להוסיף רשומה כאן ולא לגעת בלוגיקה.
+export const WHEELS: readonly WheelSpec[] = [G920_WHEEL, VELOCITY_ONE_WHEEL];
+
+/** הרשומה של ההתקן, או null אם אינו הגה מוכרת. */
+export const wheelSpecOf = (p: Gamepad | null): WheelSpec | null =>
+  (p && WHEELS.find((w) => w.matches(p.id))) || null;
+
+/** זיהוי ההגה (כל סוג) — כדי לבודד אותה מהג'ויסטיקים ומשלט ה-PS. */
+export const isWheelPad = (p: Gamepad | null): boolean => wheelSpecOf(p) !== null;
+
+export const isG920 = (p: Gamepad | null): boolean => wheelSpecOf(p) === G920_WHEEL;
+export const isVelocityOne = (p: Gamepad | null): boolean => wheelSpecOf(p) === VELOCITY_ONE_WHEEL;
+
+/**
+ * כמו wheelSpecOf, אבל עם G920 כברירת מחדל להתקן לא מזוהה (או null).
+ * קיים כדי שקוראים שרק מציצים באינדקס לא יצטרכו לטפל ב-null.
+ */
+export const wheelMapOf = (p: Gamepad | null): WheelSpec =>
+  wheelSpecOf(p) ?? G920_WHEEL;
 
 // ההגה: ±range -> ±1, עם deadzone סביב 0. אחרי אזור-המת מתחילים מ-0 ולא מקפיצה,
 // בדיוק כמו shapeStick של הסטיקים, כך ששתי משפחות הפקדים מתנהגות באותה שפה.
@@ -199,7 +280,11 @@ export const wheelHat = (p: Gamepad | null): { x: number; y: number } =>
   p ? decodeHatAxis(p.axes?.[wheelMapOf(p).hatAxis]) : { x: 0, y: 0 };
 
 /** כפתור של ההגה לפי תפקיד לוגי. תפקיד שאינו קיים בהגה הזו מחזיר false. */
-export const wheelBtn = (p: Gamepad | null, role: keyof WheelMap): boolean => {
+export type WheelBtnRole =
+  | 'gasBtn' | 'reverseBtn' | 'layoutMenu' | 'menuUp' | 'menuDown' | 'menuLeft'
+  | 'menuRight' | 'paneSwitch' | 'droneLinkBtn' | 'noseUp' | 'noseDown';
+
+export const wheelBtn = (p: Gamepad | null, role: WheelBtnRole): boolean => {
   if (!p) return false;
   const idx = wheelMapOf(p)[role];
   return typeof idx === 'number' && (p.buttons?.[idx]?.pressed || false);
@@ -273,25 +358,26 @@ export const wheelLaunchActive = (
 ): boolean => {
   if (!p) return false;
   const m = wheelMapOf(p);
-  if (m.launchAxis !== null) {
+  if (m.launchSource === 'throttle') {
     const fwd = axisFromRest(p, m.launchAxis, cal.deadzone) * VELOCITY_ONE_THRUST_SIGN;
     return fwd > LAUNCH_THROTTLE_THRESHOLD;
   }
-  return wheelHat(p).y < 0;
+  return wheelHat(p).y < 0;   // launchSource === 'hat'
 };
 
 /**
- * האם פקד ההמראה הוא *אותו* פקד ששולט בגובה אחרי ההמראה (ה-HAT).
- * ב-G920 כן — ולכן ההמראה שם חייבת להיפסק ברגע שהרחפן באוויר, אחרת אותה דחיפה
- * של ה-HAT הייתה נספרת פעמיים באותו פריים (גם המראה ב-Robot.tsx וגם טיפוס ב-Drone.tsx).
- * ב-VelocityOne ההמראה היא ציר נפרד (AXIS 2), ולכן אין התנגשות והיא מתנהגת כמו
- * בשאר אופני הניהוג: מעלה את הרחפן כל עוד מחזיקים, עד תקרת ההמראה.
+ * האם ההמראה ממשיכה להרים את הרחפן גם אחרי שהוא באוויר.
+ * ההחלטה מוצהרת בכל הגה בשדה launchHoldsAfterTakeoff — ראה שם את ההסבר.
  */
-export const wheelLaunchSharesHat = (p: Gamepad | null): boolean =>
-  wheelMapOf(p).launchAxis === null;
+export const wheelLaunchHoldsAfterTakeoff = (p: Gamepad | null): boolean =>
+  wheelMapOf(p).launchHoldsAfterTakeoff;
+
+/** האם אף הרחפן חוזר לאופק מעצמו בהגה הזו. מוצהר בשדה noseAutoLevel. */
+export const wheelNoseAutoLevels = (p: Gamepad | null): boolean =>
+  wheelMapOf(p).noseAutoLevel;
 
 /**
- * כיוון הטיית אף הרחפן מכפתורים (+1 מעלה / −1 מטה / 0). ב-G920 בלבד.
+ * כיוון הטיית אף הרחפן מכפתורים (+1 מעלה / −1 מטה / 0).
  * חיבורי ולא "הראשון שנמצא", כדי לשמור בדיוק על ההתנהגות שהייתה: שני הכפתורים
  * לחוצים יחד מתקזזים ל-0, כמו שני ה-if הנפרדים שהיו ב-Drone.tsx.
  */
@@ -328,8 +414,8 @@ export function readWheelFlight(
   const m = wheelMapOf(pad);
   const ax = pad.axes;
 
-  if (m.thrustAxis === null) {
-    // G920: ההסעה והסיבוב נגזרים מאותו מיקס דיפרנציאלי שמניע את הזחלים.
+  if (m.thrustSource === 'pedals') {
+    // ההסעה והסיבוב נגזרים מאותו מיקס דיפרנציאלי שמניע את הזחלים.
     const w = readWheelDrive(pad, { cal });
     return {
       fwd: (w.left + w.right) / 2,
@@ -351,7 +437,7 @@ export function readWheelFlight(
 
   // האף הוא ההיפוך של כיוון הנהיגה: דחיפה (drive חיובי) → האף יורד.
   // קשירה לאותו קבוע סימן מבטיחה שאם כיוון הציר יתברר הפוך, שניהם יתהפכו יחד.
-  const noseRate = m.noseAxis === null ? 0
+  const noseRate = m.noseSource !== 'axis' ? 0
     : -(normBipolar(ax?.[m.noseAxis] ?? 0, cal.deadzone) * VELOCITY_ONE_DRIVE_SIGN);
 
   return { fwd, turn: -2 * steer, noseRate };
@@ -388,7 +474,7 @@ export function readWheelDrive(
 
   let gas: number, reverse: number;
 
-  if (m.driveAxis !== null) {
+  if (m.driveSource === 'axis') {
     // ===== ציר נהיגה אחד דו-כיווני (VelocityOne): דחיפה = קדימה, משיכה = אחורה =====
     // מחוון "Pedal Sensitivity" ממשיך להיות ההגבר על הנהיגה, בדיוק כמו בדוושות,
     // כך שאותו פרופיל בתפריט ההגדרות משרת את שתי ההגות.
@@ -397,7 +483,7 @@ export function readWheelDrive(
     gas = Math.max(0, d);
     reverse = Math.max(0, -d);
   } else {
-    // ===== שתי דוושות (G920) =====
+    // ===== שתי דוושות =====
     // גז מהדוושה (0..1) או מכפתור B בהגה (בינארי מלא) — הגדול מביניהם
     const gasPedal = normPedal(ax?.[m.gasAxis ?? GAS_AXIS] ?? 1, GAS_PRESSED);
     const gasBtn   = (!opts.ignoreButtons && m.gasBtn !== null && bt?.[m.gasBtn]?.pressed) ? 1 : 0;
