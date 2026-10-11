@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { useTelemetryStore, ScreenLayout} from '../store';
 import { useKeyboard } from '../hooks/useKeyboard';
 // מיפוי ההגה + מפענח האט — משותף עם הרובוט, כדי שהתחושה תהיה זהה בשני הכלים.
-import { decodeHatAxis, isWheelPad, readWheelDrive, readWheelFlight, wheelHat } from '../wheelInput';
+import { decodeHatAxis, isWheelPad, readWheelDrive, readWheelFlight, wheelHat, wheelNoseAutoLevels } from '../wheelInput';
 // התנגשות הרחפן בגבעות/מבנים — כל תזוזה עוברת דרך resolveDroneMove.
 import { resolveDroneMove } from '../droneCollision';
 
@@ -449,9 +449,29 @@ export function DroneControls() {
         // לשאר הכלים, ולכן התחושה אחידה בכל אופני הניהוג.
         const wf = readWheelFlight(wheelPadF);
 
-        // הטיית האף. הזווית נשמרת עד שמחזירים אותה ידנית.
         const NOSE_RATE = 1.2;                // rad/s — זהה לשלט ה-PS
         bodyPitch += wf.noseRate * NOSE_RATE * delta;
+
+        // ===== התיישרות האף לאופק =====
+        // רק בהגות שמצהירות noseAutoLevel — כלומר כאלה שפקד האף שלהן *רגעי*
+        // (כפתורים). בהגה שבה האף הוא ציר מוחזק זה כבוי, אחרת ההתיישרות הייתה
+        // נלחמת בכיוון שהמשתמשת מחזיקה כרגע.
+        // הדעיכה והתנאים זהים לשלט ה-PS: רק אחרי שטסנו ואז עצרנו, וכל כוונון
+        // ידני של האף מבטל את ההתיישרות עד הטיסה הבאה.
+        if (wheelNoseAutoLevels(wheelPadF)) {
+          const noseHeld = wf.noseRate !== 0 || aimBodyPitch.current !== 0;
+          const flightIdle = wf.fwd === 0 && wf.turn === 0;
+          if (noseHeld) {
+            noseLevelArmed.current = false;      // כוונון ידני — מחזיקים את הזווית
+          } else if (!flightIdle) {
+            noseLevelArmed.current = true;       // יצאנו לדרך — בעצירה נתיישר
+          } else if (noseLevelArmed.current && Math.abs(bodyPitch) > 1e-4) {
+            // דעיכה מעריכית ולא קפיץ — יציבה בכל קצב פריימים.
+            bodyPitch -= bodyPitch * (1 - Math.exp(-delta / NOSE_LEVEL_TAU));
+            if (Math.abs(bodyPitch) < 1e-3) { bodyPitch = 0; noseLevelArmed.current = false; }
+          }
+        }
+
         bodyPitch = Math.max(-NOSE_MAX_ANGLE, Math.min(NOSE_MAX_ANGLE, bodyPitch));
         if (bodyPitch !== s.droneBodyPitch) s.setDroneBodyPitch(bodyPitch);
 
