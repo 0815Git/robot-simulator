@@ -1030,7 +1030,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
 
     // (1) שורת מקטע בקובץ ה-CSV הקיים — כך הזמן מגיע לקובץ שמורידים.
     //     משתמשים ב-_pushSegment כדי לשמור על אותו פורמט (POV/סימבולוגיה/ניהוג ששלטו במקטע).
-    get()._pushSegment('Drone Segment', s.droneSegStart, now, null);
+    get()._pushSegment('מקטע רחפן', s.droneSegStart, now, null);
 
     // (2) עדכון במקום של שורת הסשן האחרונה של הסשן הנוכחי — כפי שהתבקש.
     const num = s.currentSessionNumber ?? 0;
