@@ -546,8 +546,11 @@ export function DroneControls() {
         // חצים: מעלה/מטה = גובה, ימין/שמאל = הסטה הצידה.
         // כש-B6 מוחזק הם שייכים לזווית המצלמה (למעלה), ולכן אינם מזיזים את הרחפן.
         if (!psCamMod) {
-          if (pbt?.[12]?.pressed) ny += step;              // B12 חץ עליון = עלייה
-          if (pbt?.[13]?.pressed) ny -= step;              // B13 חץ תחתון = ירידה
+          // הגובה מוכפל בקבוע הטיפוס, כמו בכל שאר הנתיבים. קודם הוא הוכפל ב-step
+          // (שהוא FLY_SPEED, מהירות התנועה האופקית), ולכן שלט ה-PS טיפס פי 2.3
+          // מהג'ויסטיקים ומההגה.
+          if (pbt?.[12]?.pressed) ny += DRONE_CLIMB_SPEED * delta;   // B12 חץ עליון = עלייה
+          if (pbt?.[13]?.pressed) ny -= DRONE_CLIMB_SPEED * delta;   // B13 חץ תחתון = ירידה
           if (pbt?.[15]?.pressed) { nx += rX * step; nz += rZ * step; }  // B15 ימינה
           if (pbt?.[14]?.pressed) { nx -= rX * step; nz -= rZ * step; }  // B14 שמאלה
         }
