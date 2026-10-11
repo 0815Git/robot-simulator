@@ -9,7 +9,7 @@ import { getGamepadAxes } from '../hooks/useGamepads';
 import { useTelemetryStore, ViewMode, ROCKET_MAN_POS, TARGET_RANGE_M } from '../store';
 // מיפוי ההגות (G920 / VelocityOne Flight) יושב ב-src/wheelInput.ts — מקור-אמת יחיד
 // לרובוט ולרחפן, ומתרגם כל תפקיד לפי סוג ההתקן.
-import { readWheelDrive, isWheelPad, wheelLaunchActive, wheelLaunchHoldsAfterTakeoff } from '../wheelInput';
+import { readWheelDrive, isWheelPad, wheelLaunchActive, wheelLaunchHoldsAfterTakeoff, wheelBtn } from '../wheelInput';
 import { PS_CAM_MOD_HELD } from './Drone';
 import { physicsEnv } from '../physicsEnv';
 // שכבת-תאימות הג'ויסטיקים (A10C ⇄ Solaris). לא נוגעת בצירים 0/1.
@@ -208,15 +208,23 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
 
     // ===== נטרול המטרה — התאדות הדמות עם משגר הכתף =====
     // סימון ויזואלי למשתתפים בלבד: לא נשמר, לא נמדד ולא נכנס ל-CSV.
-    // מקש F במקלדת, או B8 בשלט ה-PlayStation (במצב ניהוג א', שבו מיפוי השלט פעיל).
+    // שלושה פקדים, כל אחד באופן הניהוג שבו ההתקן שלו פעיל:
+    //   • מקש F במקלדת — תמיד
+    //   • B8 בשלט ה-PlayStation — מצב א'
+    //   • הכפתור שההגה מצהירה עליו (WheelSpec.dissolveBtn) — מצב ג'
+    // כולם נכנסים לאותה נקודה אחת, ולכן כולם יורשים את אותן שלוש הגנות:
+    // בדיקת הטווח מהדמות, חד-פעמיות, וזיהוי *רגע* הלחיצה (החזקה לא מפעילה שוב).
     // רק הרובוט מבצע — הטווח נמדד ממנו, גם כשמסתכלים דרך חוזי הרחפן.
     {
+      const stD = useTelemetryStore.getState();
       const psReD = /dualsense|dualshock|wireless controller|054c|sony/i;
       const psPadD = allPads.find(p => p && psReD.test(p.id)) || null;
-      const dissolveBtn =
-        useTelemetryStore.getState().steerMode === 'A' && (psPadD?.buttons?.[8]?.pressed || false);
-      // שני הפקדים מתנהגים זהה, כולל זיהוי *רגע* הלחיצה — כדי שהחזקה לא תפעיל שוב.
-      const dissolveKey = !!keys.current['KeyF'] || dissolveBtn;
+      const psDissolve =
+        stD.steerMode === 'A' && (psPadD?.buttons?.[8]?.pressed || false);
+      // ההגה: רק באופן ניהוג ג', ורק אם ההגה המחוברת הצהירה על כפתור כזה.
+      const wheelPadD = allPads.find(isWheelPad) || null;
+      const wheelDissolve = stD.steerMode === 'C' && wheelBtn(wheelPadD, 'dissolveBtn');
+      const dissolveKey = !!keys.current['KeyF'] || psDissolve || wheelDissolve;
       if (dissolveKey && !prevDissolveKeyRef.current) {
         const stT = useTelemetryStore.getState();
         if (stT.targetDissolveAt == null) {

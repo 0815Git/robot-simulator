@@ -123,6 +123,12 @@ export interface WheelSpec {
   droneLinkBtn: number | null;  // כפתור צימוד רובוט⇄רחפן
   noseUp: number | null;        // הרמת אף — כש-noseSource='buttons'
   noseDown: number | null;      // הורדת אף — כש-noseSource='buttons'
+  /**
+   * נטרול המטרה (התאדות הדמות) — מקביל למקש F במקלדת.
+   * null = אין כפתור כזה בהגה הזו. הטווח, החד-פעמיות וזיהוי רגע הלחיצה אינם
+   * כאן אלא בנתיב המשותף ב-Robot.tsx, ולכן כל פקד שמחובר אליו יורש אותם.
+   */
+  dissolveBtn: number | null;
 }
 
 /** שם לשעבר, לתאימות לאחור. */
@@ -167,6 +173,7 @@ export const G920_WHEEL: WheelSpec = {
   droneLinkBtn: null,
   noseUp: 4,
   noseDown: 5,
+  dissolveBtn: 10,              // נטרול המטרה — כמו מקש F
 };
 
 // ================= Turtle Beach VelocityOne Flight =================
@@ -212,6 +219,7 @@ export const VELOCITY_ONE_WHEEL: WheelSpec = {
   droneLinkBtn: 2,
   noseUp: null,
   noseDown: null,
+  dissolveBtn: null,            // טרם נבחר כפתור בהגה הזו
 };
 
 // כל ההגות המוכרות. להוספת הגה — להוסיף רשומה כאן ולא לגעת בלוגיקה.
@@ -281,7 +289,8 @@ export const wheelHat = (p: Gamepad | null): { x: number; y: number } =>
 /** כפתור של ההגה לפי תפקיד לוגי. תפקיד שאינו קיים בהגה הזו מחזיר false. */
 export type WheelBtnRole =
   | 'gasBtn' | 'reverseBtn' | 'layoutMenu' | 'menuUp' | 'menuDown' | 'menuLeft'
-  | 'menuRight' | 'paneSwitch' | 'droneLinkBtn' | 'noseUp' | 'noseDown';
+  | 'menuRight' | 'paneSwitch' | 'droneLinkBtn' | 'noseUp' | 'noseDown'
+  | 'dissolveBtn';
 
 export const wheelBtn = (p: Gamepad | null, role: WheelBtnRole): boolean => {
   if (!p) return false;
