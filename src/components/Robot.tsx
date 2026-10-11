@@ -24,6 +24,7 @@ import {
   sortGrips,
   droneLinkTrigger,
   droneLinkGateOpen,
+  dissolvePressed,
 } from '../controllerConfig';
 export const physicalSpeeds = { left: 0, right: 0 };
 
@@ -210,9 +211,10 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
 
     // ===== נטרול המטרה — התאדות הדמות עם משגר הכתף =====
     // סימון ויזואלי למשתתפים בלבד: לא נשמר, לא נמדד ולא נכנס ל-CSV.
-    // שלושה פקדים, כל אחד באופן הניהוג שבו ההתקן שלו פעיל:
+    // ארבעה פקדים, כל אחד באופן הניהוג שבו ההתקן שלו פעיל:
     //   • מקש F במקלדת — תמיד
     //   • B8 בשלט ה-PlayStation — מצב א'
+    //   • הכפתור שהג'ויסטיק מצהיר עליו (ButtonMap.dissolveBtn) — מצב ב'
     //   • הכפתור שההגה מצהירה עליו (WheelSpec.dissolveBtn) — מצב ג'
     // כולם נכנסים לאותה נקודה אחת, ולכן כולם יורשים את אותן שלוש הגנות:
     // בדיקת הטווח מהדמות, חד-פעמיות, וזיהוי *רגע* הלחיצה (החזקה לא מפעילה שוב).
@@ -223,10 +225,14 @@ export function Robot({ hideVisuals = false }: { hideVisuals?: boolean }) {
       const psPadD = allPads.find(p => p && psReD.test(p.id)) || null;
       const psDissolve =
         stD.steerMode === 'A' && (psPadD?.buttons?.[8]?.pressed || false);
+      // הג'ויסטיקים: רק באופן ניהוג ב', ורק בהתקן שהצהיר על כפתור כזה
+      // (Solaris = B17; ב-A10C השדה null ולכן אינו נקרא בכלל).
+      const jsDissolve = stD.steerMode === 'B' && allPads.some(
+        p => p && !isWheelPad(p) && !psReD.test(p.id) && dissolvePressed(p));
       // ההגה: רק באופן ניהוג ג', ורק אם ההגה המחוברת הצהירה על כפתור כזה.
       const wheelPadD = allPads.find(isWheelPad) || null;
       const wheelDissolve = stD.steerMode === 'C' && wheelBtn(wheelPadD, 'dissolveBtn');
-      const dissolveKey = !!keys.current['KeyF'] || psDissolve || wheelDissolve;
+      const dissolveKey = !!keys.current['KeyF'] || psDissolve || jsDissolve || wheelDissolve;
       if (dissolveKey && !prevDissolveKeyRef.current) {
         const stT = useTelemetryStore.getState();
         if (stT.targetDissolveAt == null) {

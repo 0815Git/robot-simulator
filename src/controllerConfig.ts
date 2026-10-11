@@ -62,6 +62,13 @@ export interface ButtonMap {
    */
   droneLinkConfirm: number | null;
   invertY: number;      // היפוך ציר Y של הצלב
+  /**
+   * נטרול המטרה (התאדות הדמות) — מקביל למקש F במקלדת.
+   * null = אין כפתור כזה בהתקן הזה. הטווח מהדמות, החד-פעמיות וזיהוי רגע
+   * הלחיצה אינם כאן אלא בנתיב המשותף ב-Robot.tsx, ולכן כל פקד שמחובר
+   * אליו יורש אותם ואין צורך לשחזר אותם לכל התקן.
+   */
+  dissolveBtn: number | null;
 }
 
 export const A10C_BTN: ButtonMap = {
@@ -72,6 +79,7 @@ export const A10C_BTN: ButtonMap = {
   droneLink: 2,
   droneLinkConfirm: null,   // B2 לבדו מצמד, כמו שהיה תמיד
   invertY: 2,
+  dissolveBtn: null,        // טרם נבחר כפתור בהתקן הזה
 };
 
 // TODO(SOLARIS_INVERT_Y): כפתור היפוך-Y טרם נבחר ע"י המשתמש. 14 הוא ברירת-מחדל
@@ -86,6 +94,7 @@ export const SOLARIS_BTN: ButtonMap = {
   droneLink: 27,
   droneLinkConfirm: 25,     // B27 מוחזק + B25 נלחץ = צימוד. B27 לבדו: כלום.
   invertY: SOLARIS_INVERT_Y_BTN,
+  dissolveBtn: 17,          // נטרול המטרה — כמו מקש F
 };
 
 export const btnMapOf = (p: Gamepad | null): ButtonMap =>
@@ -212,4 +221,11 @@ export const paneSwitchSuppressed = (p: Gamepad | null): boolean => {
   if (!p) return false;
   const m = btnMapOf(p);
   return m.droneLinkConfirm !== null && (p.buttons?.[m.droneLink]?.pressed || false);
+};
+
+/** האם כפתור נטרול המטרה לחוץ. התקן שאין לו כפתור כזה מחזיר false. */
+export const dissolvePressed = (p: Gamepad | null): boolean => {
+  if (!p) return false;
+  const idx = btnMapOf(p).dissolveBtn;
+  return idx !== null && (p.buttons?.[idx]?.pressed || false);
 };
