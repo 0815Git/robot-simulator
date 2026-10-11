@@ -6,6 +6,8 @@ import { useFrame } from '@react-three/fiber';
 import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useTelemetryStore } from '../store';
+// רדיוס גוף הרחפן — מקור יחיד, משותף להתנגשויות ולחיישני הקרקע.
+import { DRONE_RADIUS } from '../droneCollision';
 
 function SwayingTree({ treeModel, x, z, scale, rotationY, visualsOnly }: any) {
   const treeRef = useRef<THREE.Group>(null);
@@ -214,6 +216,14 @@ function VirtualGate({
 const DRONE_SENSOR2 = { cx: 0, cz: 3.5, hx: 7.5, hz: 0.7 };
 const DRONE_SENSOR5 = { cx: -49, cz: -152.5, hx: 4, hz: 0.5 };
 
+// מספיק ש*קצה* הרחפן חלף מעל השטיח, לא נקודת המרכז שלו. מרחיבים את המלבן
+// ברדיוס גוף הרחפן — אותו DRONE_RADIUS שמשמש להתנגשויות, כדי שגודל הרחפן
+// יהיה מוגדר במקום אחד בלבד. מבחינה גאומטרית זו בדיקת חפיפה בין עיגול הרחפן
+// למלבן השטיח, בקירוב של פינות מרובעות (הפרש זניח ברדיוס 0.5 מ').
+const overSensor = (x: number, z: number, s: { cx: number; cz: number; hx: number; hz: number }) =>
+  Math.abs(x - s.cx) <= s.hx + DRONE_RADIUS &&
+  Math.abs(z - s.cz) <= s.hz + DRONE_RADIUS;
+
 function DroneSensorWatcher() {
   const triggerDroneStart = useTelemetryStore(s => s.triggerDroneStart);
   const triggerDroneEnd = useTelemetryStore(s => s.triggerDroneEnd);
@@ -231,13 +241,11 @@ function DroneSensorWatcher() {
     }
     const [x, , z] = s.dronePosition;
 
-    const overS2 = Math.abs(x - DRONE_SENSOR2.cx) <= DRONE_SENSOR2.hx &&
-                   Math.abs(z - DRONE_SENSOR2.cz) <= DRONE_SENSOR2.hz;
+    const overS2 = overSensor(x, z, DRONE_SENSOR2);
     if (overS2 && !inS2.current) triggerDroneStart();
     inS2.current = overS2;
 
-    const overS5 = Math.abs(x - DRONE_SENSOR5.cx) <= DRONE_SENSOR5.hx &&
-                   Math.abs(z - DRONE_SENSOR5.cz) <= DRONE_SENSOR5.hz;
+    const overS5 = overSensor(x, z, DRONE_SENSOR5);
     // רק אם המקטע כבר נפתח — כניסה מעל sensor-5 סוגרת אותו.
     if (overS5 && !inS5.current && s.droneSegStart != null) triggerDroneEnd();
     inS5.current = overS5;
