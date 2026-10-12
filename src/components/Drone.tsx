@@ -453,19 +453,22 @@ export function DroneControls() {
         bodyPitch += wf.noseRate * NOSE_RATE * delta;
 
         // ===== התיישרות האף לאופק =====
-        // רק בהגות שמצהירות noseAutoLevel — כלומר כאלה שפקד האף שלהן *רגעי*
-        // (כפתורים). בהגה שבה האף הוא ציר מוחזק זה כבוי, אחרת ההתיישרות הייתה
-        // נלחמת בכיוון שהמשתמשת מחזיקה כרגע.
-        // הדעיכה והתנאים זהים לשלט ה-PS: רק אחרי שטסנו ואז עצרנו, וכל כוונון
-        // ידני של האף מבטל את ההתיישרות עד הטיסה הבאה.
+        // רק בהגות שמצהירות noseAutoLevel. הדעיכה זהה לשלט ה-PS, אבל שני פרטים
+        // שונים ממנו — שניהם בגלל שבהגה האף הוא *ציר קפיצי* ולא כפתור רגעי:
+        //
+        // 1. הטיסה טוענת קודם. בשלט האף נלחץ ומשוחרר *לפני* הטיסה, ולכן שם
+        //    "נגיעה באף" קודמת ומבטלת. בהגה מחזיקים את ההגה מוטה *תוך כדי*
+        //    הטיסה, וסדר כזה היה אומר שההתיישרות לא נטענת לעולם.
+        //
+        // 2. נגיעה באף *משהה* ואינה מבטלת. ההגה וציר האף אינם חוזרים למרכז
+        //    באותו רגע; די ברבע שנייה של פיגור כדי שהביטול יתפוס בדיוק כשהטיסה
+        //    נעצרת, ואז האף נתקע בזווית שלו. אומת מול לוג חי מהמכשיר.
         if (wheelNoseAutoLevels(wheelPadF)) {
           const noseHeld = wf.noseRate !== 0 || aimBodyPitch.current !== 0;
           const flightIdle = wf.fwd === 0 && wf.turn === 0;
-          if (noseHeld) {
-            noseLevelArmed.current = false;      // כוונון ידני — מחזיקים את הזווית
-          } else if (!flightIdle) {
+          if (!flightIdle) {
             noseLevelArmed.current = true;       // יצאנו לדרך — בעצירה נתיישר
-          } else if (noseLevelArmed.current && Math.abs(bodyPitch) > 1e-4) {
+          } else if (!noseHeld && noseLevelArmed.current && Math.abs(bodyPitch) > 1e-4) {
             // דעיכה מעריכית ולא קפיץ — יציבה בכל קצב פריימים.
             bodyPitch -= bodyPitch * (1 - Math.exp(-delta / NOSE_LEVEL_TAU));
             if (Math.abs(bodyPitch) < 1e-3) { bodyPitch = 0; noseLevelArmed.current = false; }
